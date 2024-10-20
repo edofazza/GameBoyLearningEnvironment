@@ -490,7 +490,7 @@ class PokemonGoldSilver(Env):
         if self.subtask == 'enter_first_route':
             self.visited = list()
 
-        with importlib.resources.path('gle.rom', "Pokemon - Silver Version (UE) [C][!].gbc") as rom_path:
+        with importlib.resources.path('gle.roms', "Pokemon - Silver Version (UE) [C][!].gbc") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
@@ -610,7 +610,7 @@ class PokemonGoldSilver(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        with importlib.resources.path('gle.rom', "Pokemon - Silver Version (UE) [C][!].gbc") as rom_path:
+        with importlib.resources.path('gle.roms', "Pokemon - Silver Version (UE) [C][!].gbc") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type

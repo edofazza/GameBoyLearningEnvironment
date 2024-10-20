@@ -617,7 +617,8 @@ class PokemonBlueRed(Env):
         if self.subtask == 'enter_first_route':
             self.visited = list()
 
-        with importlib.resources.path('gle.rom', "Pokemon Red (UE) [S][!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
+            print(rom_path)
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
@@ -744,7 +745,7 @@ class PokemonBlueRed(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        with importlib.resources.path('gle.rom', "Pokemon Red (UE) [S][!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type

@@ -108,7 +108,7 @@ class DonkeyKongLand(Env):
         self.actions_taken = 0
         self.window_type = window_type
 
-        with importlib.resources.path('gle.rom', "Donkey Kong Land (U) [S][!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Donkey Kong Land (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
@@ -200,7 +200,7 @@ class DonkeyKongLand(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        with importlib.resources.path('gle.rom', "Donkey Kong Land (U) [S][!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Donkey Kong Land (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type

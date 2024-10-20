@@ -109,7 +109,7 @@ class ZeldaLinksAwakening(Env):
 
         self.subtask = subtask
 
-        with importlib.resources.path('gle.rom', "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
@@ -200,7 +200,7 @@ class ZeldaLinksAwakening(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        with importlib.resources.path('gle.rom',
+        with importlib.resources.path('gle.roms',
                                       "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,

@@ -37,7 +37,7 @@ class SolomonsClub(Env):
         self.prev_money = None
         self.window_type = window_type
 
-        with importlib.resources.path('gle.rom', "Solomon's Club (UE) [!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
@@ -135,7 +135,7 @@ class SolomonsClub(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        with importlib.resources.path('gle.rom', "Solomon's Club (UE) [!].gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type

@@ -39,7 +39,7 @@ class FinalFantasyAdventure(Env):
         super().__init__()
 
         self.window_type = window_type
-        with importlib.resources.path('gle.rom', "Final Fantasy Adventure (USA).gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
@@ -143,7 +143,7 @@ class FinalFantasyAdventure(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        with importlib.resources.path('gle.rom', "Final Fantasy Adventure (USA).gb") as rom_path:
+        with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
                 rom_path,
                 window_type=self.window_type
