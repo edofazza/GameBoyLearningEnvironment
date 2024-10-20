@@ -4,6 +4,7 @@ import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
 from pyboy import PyBoy, WindowEvent
 from gymnasium import Env, spaces
+import importlib.resources
 
 from general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
 
@@ -616,10 +617,11 @@ class PokemonBlueRed(Env):
         if self.subtask == 'enter_first_route':
             self.visited = list()
 
-        self.pyboy = PyBoy(
-            "roms/Pokemon Red (UE) [S][!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Pokemon Red (UE) [S][!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
 
         self.save_path = save_path
         self.load_path = load_path
@@ -742,10 +744,11 @@ class PokemonBlueRed(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        self.pyboy = PyBoy(
-            "roms/Pokemon Red (UE) [S][!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Pokemon Red (UE) [S][!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
         if self.load_path is not None:
             self.load()
         self.screen = self.pyboy.botsupport_manager().screen()

@@ -135,10 +135,11 @@ class SolomonsClub(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        self.pyboy = PyBoy(
-            "roms/Solomon's Club (UE) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Solomon's Club (UE) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
         if self.load_path is not None:
             self.load()
         self.screen = self.pyboy.botsupport_manager().screen()

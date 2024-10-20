@@ -4,6 +4,7 @@ import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
 from pyboy import PyBoy, WindowEvent
 from gymnasium import Env, spaces
+import importlib.resources
 
 from general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
 
@@ -71,10 +72,11 @@ class SuperMarioLand(Env):
         self.window_type = window_type
         self.prev_score = None
 
-        self.pyboy = PyBoy(
-            "roms/Super Mario Land (JUE) (V1.1) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
 
         self.set_world_level(world, level)
 
@@ -167,10 +169,11 @@ class SuperMarioLand(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        self.pyboy = PyBoy(
-            "roms/Super Mario Land (JUE) (V1.1) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
         if self.load_path is not None:
             self.load()
         self.screen = self.pyboy.botsupport_manager().screen()

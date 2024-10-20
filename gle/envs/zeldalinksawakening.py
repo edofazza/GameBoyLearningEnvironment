@@ -4,6 +4,7 @@ import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
 from pyboy import PyBoy, WindowEvent
 from gymnasium import Env, spaces
+import importlib.resources
 
 from general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
 
@@ -108,10 +109,11 @@ class ZeldaLinksAwakening(Env):
 
         self.subtask = subtask
 
-        self.pyboy = PyBoy(
-            "roms/Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
 
         self.save_path = save_path
         self.load_path = load_path
@@ -198,10 +200,12 @@ class ZeldaLinksAwakening(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        self.pyboy = PyBoy(
-            "roms/Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom',
+                                      "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
         if self.load_path is not None:
             self.load()
         self.screen = self.pyboy.botsupport_manager().screen()

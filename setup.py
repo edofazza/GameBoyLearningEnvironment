@@ -16,7 +16,7 @@ setup(
         'pyboy==1.6.14'
     ],
     package_data={
-        'gle': ['roms/*', 'states/**/*'],  # Include all files in the data directory
+        'gle': ['roms/*'],  # Include all files in the data directory
     },
     include_package_data=True,
     classifiers=[  # Optional: metadata for searchability

@@ -4,6 +4,7 @@ import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
 from pyboy import PyBoy, WindowEvent
 from gymnasium import Env, spaces
+import importlib.resources
 
 from general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
 
@@ -41,10 +42,11 @@ class MegaManDrWilysRevenge(Env):
         self.actions_taken = 0
         self.window_type = window_type
 
-        self.pyboy = PyBoy(
-            "roms/Mega Man - Dr. Wily's Revenge (E) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Mega Man - Dr. Wily's Revenge (E) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
 
         self.save_path = save_path
         self.load_path = load_path
@@ -139,10 +141,11 @@ class MegaManDrWilysRevenge(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        self.pyboy = PyBoy(
-            "roms/Mega Man - Dr. Wily's Revenge (E) [!].gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Mega Man - Dr. Wily's Revenge (E) [!].gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
         if self.load_path is not None:
             self.load()
         self.screen = self.pyboy.botsupport_manager().screen()

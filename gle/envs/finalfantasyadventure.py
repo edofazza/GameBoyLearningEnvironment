@@ -4,6 +4,7 @@ import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
 from pyboy import PyBoy, WindowEvent
 from gymnasium import Env, spaces
+import importlib.resources
 
 from general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
 
@@ -38,10 +39,12 @@ class FinalFantasyAdventure(Env):
         super().__init__()
 
         self.window_type = window_type
-        self.pyboy = PyBoy(
-            "roms/Final Fantasy Adventure (USA).gb",
-            window_type=window_type
-        )
+        with importlib.resources.path('gle.rom', "Final Fantasy Adventure (USA).gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
+
         self.pyboy.set_emulation_speed(6)
         self.save_path = save_path
         self.load_path = load_path
@@ -140,10 +143,11 @@ class FinalFantasyAdventure(Env):
 
     def close(self):
         self.pyboy.stop(save=False)
-        self.pyboy = PyBoy(
-            "roms/Final Fantasy Adventure (USA).gb",
-            window_type=self.window_type
-        )
+        with importlib.resources.path('gle.rom', "Final Fantasy Adventure (USA).gb") as rom_path:
+            self.pyboy = PyBoy(
+                rom_path,
+                window_type=self.window_type
+            )
         if self.load_path is not None:
             self.load()
         self.screen = self.pyboy.botsupport_manager().screen()
