@@ -74,7 +74,7 @@ class SuperMarioLand(Env):
 
         with importlib.resources.path('gle.roms', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -171,7 +171,7 @@ class SuperMarioLand(Env):
         self.pyboy.stop(save=False)
         with importlib.resources.path('gle.roms', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:

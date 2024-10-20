@@ -41,7 +41,7 @@ class FinalFantasyAdventure(Env):
         self.window_type = window_type
         with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -145,7 +145,7 @@ class FinalFantasyAdventure(Env):
         self.pyboy.stop(save=False)
         with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:

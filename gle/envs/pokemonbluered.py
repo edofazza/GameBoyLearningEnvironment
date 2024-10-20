@@ -618,9 +618,8 @@ class PokemonBlueRed(Env):
             self.visited = list()
 
         with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
-            print(rom_path)
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -747,7 +746,7 @@ class PokemonBlueRed(Env):
         self.pyboy.stop(save=False)
         with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:

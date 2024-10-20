@@ -111,7 +111,7 @@ class ZeldaLinksAwakening(Env):
 
         with importlib.resources.path('gle.roms', "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -203,7 +203,7 @@ class ZeldaLinksAwakening(Env):
         with importlib.resources.path('gle.roms',
                                       "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:

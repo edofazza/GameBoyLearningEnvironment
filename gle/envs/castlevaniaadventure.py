@@ -51,7 +51,7 @@ class CastlevaniaTheAdventure(Env):
 
         with importlib.resources.path('gle.roms', "Castlevania Adventure, The (E) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -145,7 +145,7 @@ class CastlevaniaTheAdventure(Env):
         self.pyboy.stop(save=False)
         with importlib.resources.path('gle.roms', "Castlevania Adventure, The (E) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:

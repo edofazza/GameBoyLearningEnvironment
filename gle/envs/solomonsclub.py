@@ -39,7 +39,7 @@ class SolomonsClub(Env):
 
         with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -137,7 +137,7 @@ class SolomonsClub(Env):
         self.pyboy.stop(save=False)
         with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:

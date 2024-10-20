@@ -126,7 +126,7 @@ class DonkeyKongLand3(Env):
 
         with importlib.resources.path('gle.roms', "Donkey Kong Land III (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
 
@@ -221,7 +221,7 @@ class DonkeyKongLand3(Env):
         self.pyboy.stop(save=False)
         with importlib.resources.path('gle.roms', "Donkey Kong Land III (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
-                rom_path,
+                str(rom_path),
                 window_type=self.window_type
             )
         if self.load_path is not None:
