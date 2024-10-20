@@ -6,7 +6,7 @@ from pyboy import PyBoy, WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
-from general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
+from gle.envs.general import ALL_ACTIONS, ALL_RELEASE_ACTIONS
 
 
 class ZeldaLinksAwakening(Env):

@@ -12,4 +12,4 @@ from gle.envs.pokemongoldsilver import PokemonGoldSilver
 from gle.envs.megamanxtreme import MegaManXtreme
 from gle.envs.megamandrwilysrevenge import MegaManDrWilysRevenge
 
-from utils import create_env
+from gle.utils import create_env

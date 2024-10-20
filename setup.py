@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='gle',  # Replace with your package name
-    version='0.1.0',  # Initial release version
+    name='GameBoyLearningEnvironment',  # Replace with your package name
+    version='0.1.2',  # Initial release version
     author='Edoardo Fazzari',
     author_email='edoardo.fazzari@gmail.com',
     description='A short description of the package',
