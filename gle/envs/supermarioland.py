@@ -66,6 +66,9 @@ class SuperMarioLand(Env):
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
                  max_actions: int | None = None, all_actions: bool = False, world: int = 1, level: int = 1,):
         assert window_type == 'SDL2' or window_type == 'headless'
+        assert world in [1, 2, 3, 4]
+        assert level in [1, 2, 3]
+
         super().__init__()
         self.max_actions = max_actions
         self.actions_taken = 0
@@ -78,6 +81,8 @@ class SuperMarioLand(Env):
                 window_type=self.window_type
             )
 
+        self.world = world
+        self.level = level
         self.set_world_level(world, level)
 
         self.save_path = save_path
@@ -158,6 +163,7 @@ class SuperMarioLand(Env):
         self.actions_taken = 0
         self.prev_score = None
 
+        self.set_world_level(self.world, self.level)
         if self.load_path is None:
             self.skip_game_initial_video()
 
