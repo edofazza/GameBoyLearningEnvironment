@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='GameBoyLearningEnvironment',
-    version='0.1.5',  # Initial release version
+    version='0.2.0',  # Initial release version
     author='Edoardo Fazzari',
     author_email='edoardo.fazzari@gmail.com',
     description='A short description of the package',
