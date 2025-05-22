@@ -8,7 +8,7 @@ pip install GameBoyLearningEnvironment
 
 We provide also a set of ROM states, available in the `states` folder. For a description of them look at the paper Supplementary Material.
 
-To use the library use the paper: 
+Here a simple example of how to use our library: 
 
 ```python
 from gle import create_env, PokemonBlueRed
