@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='GameBoyLearningEnvironment',  # Replace with your package name
-    version='0.1.4',  # Initial release version
+    name='GameBoyLearningEnvironment',
+    version='0.1.5',  # Initial release version
     author='Edoardo Fazzari',
     author_email='edoardo.fazzari@gmail.com',
     description='A short description of the package',
@@ -12,8 +12,11 @@ setup(
     packages=find_packages(),  # Automatically finds your package directories
     install_requires=[
         'gymnasium',
-        'numpy',
-        'pyboy==1.6.14'
+        'numpy==1.26.4',
+        'pyboy==1.6.14',
+        'pygame==2.5.2',
+        'pillow==10.3.0',
+        'opencv-python==4.10.0.82'
     ],
     package_data={
         'gle': ['roms/*'],  # Include all files in the data directory

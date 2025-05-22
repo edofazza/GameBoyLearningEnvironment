@@ -23,7 +23,8 @@ class KirbysDreamLand(Env):
     BOSS_HP_ADDR = 0xD093
 
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
-                 max_actions: int | None = None, all_actions: bool = False):
+                 max_actions: int | None = None, all_actions: bool = False, subtask: str | None = None,
+                 return_sound: bool = False,):
         assert window_type == 'SDL2' or window_type == 'headless'
         super().__init__()
         self.prev_action_idx = None
@@ -31,6 +32,8 @@ class KirbysDreamLand(Env):
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Kirby's Dream Land (USA, Europe).gb") as rom_path:
             self.pyboy = PyBoy(
@@ -86,14 +89,28 @@ class KirbysDreamLand(Env):
 
         self.screen = self.pyboy.botsupport_manager().screen()
 
-        self.reset()
+        self.subtask = subtask
+        if self.subtask == 'boss_battle':
+            self.prev_boss_hp = 0  # initial boss life
+            self.initial_boss_hp = 0
+        else:
+            self.prev_score = 0
+            self.original_score = 0
+
+        _, info = self.reset()
+        if self.subtask == 'boss_battle':
+            self.boss_hp = info['boss_hp']
+            self.boss_hp_original = info['boss_hp']
+        else:
+            self.prev_score = info['score']
+            self.original_score = info['score']
 
     #   ******************************************************
     #               GYMNASIUM OVERRIDING FUNCTION
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         self.take_action(action)
         obs = self.render()
         info = self.get_info()
@@ -105,9 +122,18 @@ class KirbysDreamLand(Env):
         if info['lives'] == 0:
             done = True
 
-        reward = info['score'] - self.prev_score
-        self.prev_score = info['score']
-        return obs, reward, done, False, info
+        if self.subtask == 'boss_battle':
+            reward = self.prev_boss_hp - info['boss_hp']
+            self.prev_boss_hp = info['boss_hp']
+            done = self.prev_boss_hp == 0 or done
+        else:
+            reward = info['score'] - self.prev_score
+            self.prev_score = info['score']
+
+        if self.return_sound:
+            return obs, self.screen.sound, reward, done, False, info
+        else:
+            return obs, reward, done, False, info
 
     def reset(
             self,
@@ -117,7 +143,10 @@ class KirbysDreamLand(Env):
     ) -> tuple[ObsType, dict[str, Any]]:
         self.close()
         self.prev_action_idx = None
-        self.prev_score = 0
+        if self.subtask == 'boss_battle':
+            self.prev_boss_hp = self.initial_boss_hp
+        else:
+            self.prev_score = self.original_score
         self.actions_taken = 0
 
         if self.load_path is None:

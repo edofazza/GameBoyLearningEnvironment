@@ -43,12 +43,14 @@ class CastlevaniaIIBelmontsRevenge(Env):
 
     def __init__(self, level: str = 'crystal', hard: bool = False, window_type: str = 'headless',
                  save_path: str | None = None, load_path: str | None = None, max_actions: int | None = None,
-                 all_actions: bool = False):
+                 all_actions: bool = False, return_sound: bool = False,):
         assert window_type == 'SDL2' or window_type == 'headless'
         super().__init__()
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Castlevania II - Belmont's Revenge (U) [!].gb") as rom_path:
             self.pyboy = PyBoy(
@@ -64,6 +66,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             if level in ['crystal', 'cloud', 'plant', 'rock'] and hard:
                 level += '_hard'
             self.load_path = f'states/castlevaniaiibelmont/{level}.state'
+            self.load()
 
         print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
 
@@ -113,7 +116,9 @@ class CastlevaniaIIBelmontsRevenge(Env):
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[
+        ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
+
         self.take_action(action)
         obs = self.render()
         info = self.get_info()
@@ -124,7 +129,10 @@ class CastlevaniaIIBelmontsRevenge(Env):
 
         reward = info['score'] - self.prev_score
         self.prev_score = info['score']
-        return obs, reward, done, False, info
+        if self.return_sound:
+            return obs, self.screen.sound, reward, done, False, info
+        else:
+            return obs, reward, done, False, info
 
     def reset(
             self,

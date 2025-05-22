@@ -1,4 +1,4 @@
-from typing import Any, SupportsFloat
+from typing import Any, SupportsFloat, Callable, List
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
@@ -602,20 +602,20 @@ class PokemonBlueRed(Env):
 
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
                  start_button: bool = False, max_actions: int | None = None, all_actions: bool = False,
-                 subtask: str | None = None,
+                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False,
                  ):
         assert window_type == 'SDL2' or window_type == 'headless'
-        assert subtask is None or subtask in ['first_pokemon', 'enter_first_route', 'beat_first_gym',
-                                              'get_six_pokemon', 'evolve_pokemon']
         super().__init__()
         # episode truncation
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
 
         self.subtask = subtask
-        if self.subtask == 'enter_first_route':
-            self.visited = list()
+        if isinstance(subtask, list):
+            self.completed_subtasks = [False] * len(subtask)
 
         with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
@@ -665,18 +665,12 @@ class PokemonBlueRed(Env):
         self.screen = self.pyboy.botsupport_manager().screen()
         _, info = self.reset()
 
-        if self.subtask == 'evolve_pokemon':
-            self.pokemon_ids = [info['player'][f'pokemon_{i}']['id'] for i in range(6)]
-
     #   ******************************************************
     #               GYMNASIUM OVERRIDING FUNCTION
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
-        while self.get_joypad_simulation_info()['joypad_simulation']:
-            self.pyboy.tick()
-
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         self.take_action(action)
         self.actions_taken += 1
         done = False
@@ -690,34 +684,30 @@ class PokemonBlueRed(Env):
         if info['player']['location_id'] == 0x76:   # Pokemon League: Hall of Fame
             done = True
         # SUBTASKS
-        if self.subtask == 'enter_first_route':
-            if info['player']['location_id'] == 0 and 0 not in self.visited:
-                reward = 1
-                self.visited.append(0x00)
-            elif info['player']['location_id'] == 12:
-                reward = 10
-                done = True
-            else:
-                reward = 0
-        elif self.subtask == 'first_pokemon':
-            reward = 1 if info['player']['pokemon_1']['id'] != 255 else 0
-        elif self.subtask == 'get_six_pokemon':
+        if isinstance(self.subtask, list):
             reward = 0
-            for i in range(6):
-                reward += 1 if info['player'][f'pokemon_{i}']['id'] != 255 else 0
-            reward = 1 if reward == 6 else 0
-        elif self.subtask == 'beat_first_gym':
-            reward = 1 if 0 in info['player']['badges'] else 0
-        elif self.subtask == 'evolve_pokemon':
-            current_pokemon_ids = [info['player'][f'pokemon_{i}']['id'] for i in range(6)]
-            evolved = False
-            for i in range(6):
-                evolved = True if current_pokemon_ids[i] - self.pokemon_ids[i] == 1 else evolved
-            reward = 1 if evolved else 0
+            subtasks_done = 0
+            for i, st in enumerate(self.subtask):
+                if not self.completed_subtasks[i]:
+                    subtask_reward = st(info)
+                    if subtask_reward > 0:
+                        self.completed_subtasks[i] = True
+                        subtasks_done += 1
+                    reward += subtask_reward
+                else:
+                    subtasks_done += 1
+            if subtasks_done == len(self.subtask):
+                done = True
+        elif isinstance(self.subtask, Callable):
+            reward = self.subtask(info)
+            done = reward > 0 or done
         else:
             reward = 0
 
-        return obs, reward, done, False, info
+        if self.return_sound:
+            return obs, self.screen.sound, reward, done, False, info
+        else:
+            return obs, reward, done, False, info
 
     def reset(
             self,
@@ -727,15 +717,13 @@ class PokemonBlueRed(Env):
     ) -> tuple[ObsType, dict[str, Any]]:
         self.close()
         self.actions_taken = 0
-        self.visited = list()
+        if isinstance(self.subtask, list):
+            self.completed_subtasks = [False] * len(self.subtask)
 
         if self.load_path is None:
             self.skip_game_initial_video()
 
         info = self.get_info()
-
-        if self.subtask == 'evolve_pokemon':
-            self.pokemon_ids = [info['player'][f'pokemon_{i}']['id'] for i in range(6)]
         return self.render(), info
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
@@ -1523,3 +1511,238 @@ class PokemonBlueRed(Env):
 
     def read_bcd(self, value):
         return 10 * ((value >> 4) & 0x0f) + (value & 0x0f)
+
+    #   ******************************************************
+    #                        TASKS
+    #   ******************************************************
+    @staticmethod
+    def collect_item_from_pc(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 1
+        if info['player']['location_id'] == 38:
+            for i in range(20):
+                if info['items'][f'item{i}']['id'] == 0x14:
+                    return multiplier
+
+        return 0
+
+    @staticmethod
+    def get_out_your_house(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 2
+        reward = 1 if info['player']['location_id'] == 0 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def be_escorted_by_professor(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 3
+        reward = 1 if info['joypad_simulation'] else 0
+        return reward * multiplier
+
+    @staticmethod
+    def select_first_pokemon(info: dict, multiplier: float = 1.0, pokemon: str | None = None) -> float:
+        # TASK 4
+        assert pokemon is None or pokemon.lower().strip() in ['squirtle', 'charmander', 'bulbasaur'], \
+            (
+                'Pokemon should be None if which pokemon is selected is not important, otherwise squirtle, charmander, '
+                'bulbasaur]')
+
+        # squirtle == B1 char B0 b 99
+        if pokemon is None:
+            return info['player']['pokemon_in_party'] * multiplier
+        else:
+            pokemon = pokemon.lower().strip()
+            if pokemon == 'squirtle':
+                return multiplier if info['player']['pokemon_1']['id'] == 0xB1 else 0
+
+            if pokemon == 'charmander':
+                return multiplier if info['player']['pokemon_1']['id'] == 0xB0 else 0
+
+            if pokemon == 'bulbasaur':
+                return multiplier if info['player']['pokemon_1']['id'] == 0x99 else 0
+
+    @staticmethod
+    def battle_gary(info: dict, multiplier: float = 1.0, winning_multiplier: float = 2.0) -> float:
+        # TASK 5
+        if (info['opponent']['pokemon_1']['hp'] == 0 and info['opponent']['pokemon_1']['id'] != 0
+                and info['player']['location_id'] == 40):  # WINNING
+            return multiplier * winning_multiplier
+        elif info['player']['location_id'] == 40 and info['opponent']['pokemon_1']['id'] != 0:  # BATTLING
+            return multiplier
+        else:
+            return 0
+
+    @staticmethod
+    def enter_route_1(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 6
+        reward = 1 if info['player']['location_id'] == 0 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def reach_viridian_city(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 7
+        reward = 1 if info['player']['location_id'] == 1 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def visit_pokemart_and_get_package(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 8
+        reward = 0
+        for i in range(20):
+            if info['player']['location_id'] == 41 and info['items'][f'item_{i}']['id'] == 70:
+                reward = 1
+                break
+        return reward * multiplier
+
+    @staticmethod
+    def get_pokeballs(info: dict, multiplier: float = 1.0, how_many: int | None = None) -> float:
+        # TASK 9
+        for i in range(20):
+            if info['items'][f'item{i}']['id'] == 4:
+                if info['items'][f'item{i}']['quantity'] > 0:
+                    if how_many is None:
+                        return multiplier
+                    else:
+                        return multiplier * (
+                                    1 / (1 + abs(how_many - info['items'][f'item_{how_many}']['quantity'])))
+
+    @staticmethod
+    def deliver_package_and_get_pokedex(info: dict, prev_info: dict, multiplier: float = 1.0) -> float:
+        # TASK 10
+        had_parcel = False
+        for i in range(20):
+            if prev_info['items'][f'item{i}']['id'] == 70:
+                had_parcel = True
+            if had_parcel and info['items'][f'item{i}']['id'] == 255:
+                return multiplier
+            return 0
+
+    @staticmethod
+    def obtain_pidgey(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 11
+        for i in range(1, 7):
+            if info['player'][f'pokemon_{i}']['id'] == 0x24:
+                return multiplier
+        return 0
+
+    @staticmethod
+    def obtain_rattata(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 12
+        for i in range(1, 7):
+            if info['player'][f'pokemon_{i}']['id'] == 0xA5:
+                return multiplier
+        return 0
+
+    @staticmethod
+    def enter_route_2(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 13
+        reward = 1 if info['player']['location_id'] == 0x0D else 0
+        return reward * multiplier
+
+    @staticmethod
+    def reach_viridian_forest(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 14
+        reward = 1 if info['player']['location_id'] == 0x33 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def obtain_pikachu(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 15
+        for i in range(1, 7):
+            if info['player'][f'pokemon_{i}']['id'] == 0x54:
+                return multiplier
+        return 0
+
+    @staticmethod
+    def obtain_metapod(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 16
+        for i in range(1, 7):
+            if info['player'][f'pokemon_{i}']['id'] == 0x7C:
+                return multiplier
+        return 0
+
+    @staticmethod
+    def reach_pewter_city(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 17
+        reward = 1 if info['player']['location_id'] == 0x2 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def heal_pokemon_pewter_city(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 18
+        if info['player']['location_id'] == 0x3A:
+            count = 0
+            for i in range(1, 7):
+                if info['player'][f'pokemon_{i}']['id'] != 0 and info['player'][f'pokemon_{i}']['hp'] == \
+                        info['player'][f'pokemon_{i}']['max_hp']:
+                    count += 1
+            return multiplier * (1 if count == info['player']['pokemon_in_party'] else 0)
+        else:
+            return 0
+
+    @staticmethod
+    def defeat_brock(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 19
+        if 0 in info['player']['badges']:
+            return multiplier
+        else:
+            return 0
+
+    @staticmethod
+    def enter_route_3(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 20
+        reward = 1 if info['player']['location_id'] == 0xE else 0
+        return reward * multiplier
+
+    @staticmethod
+    def enter_route_3_pokemon_center(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 21
+        reward = 1 if info['player']['location_id'] == 0x44 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def collect_magikarp_in_route_3_pokemon_center(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 22
+        if info['player']['location_id'] == 0x44:
+            for i in range(1, 7):
+                if info['player'][f'pokemon_{i}']['id'] != 0x85:
+                    return multiplier
+        else:
+            return 0
+
+    @staticmethod
+    def enter_mt_moon(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 23
+        reward = 1 if info['player']['location_id'] in [0x3B, 0x3C, 0x3D] else 0
+        return reward * multiplier
+
+    @staticmethod
+    def enter_route_4(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 24
+        reward = 1 if info['player']['location_id'] == 0x0F else 0
+        return reward * multiplier
+
+    @staticmethod
+    def reach_cerulean_city(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 25
+        reward = 1 if info['player']['location_id'] == 0x3 else 0
+        return reward * multiplier
+
+    @staticmethod
+    def heal_pokemon_cerulean_city(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 26
+        if info['player']['location_id'] == 0x40:
+            count = 0
+            for i in range(1, 7):
+                if info['player'][f'pokemon_{i}']['id'] != 0 and info['player'][f'pokemon_{i}']['hp'] == \
+                        info['player'][f'pokemon_{i}']['max_hp']:
+                    count += 1
+            return multiplier * (1 if count == info['player']['pokemon_in_party'] else 0)
+        else:
+            return 0
+
+    @staticmethod
+    def defeat_misty(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 27
+        if 1 in info['player']['badges']:
+            return multiplier
+        else:
+            return 0

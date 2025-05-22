@@ -33,12 +33,18 @@ class FinalFantasyAdventure(Env):
     DEATHBLOW_GAUGE_ADDR = 0xD858  # Limited at 0x40, higher values are brought to this mark, except 0xFF that resets to 0.
 
     def __init__(self, start_button: bool = False, window_type: str = 'headless', save_path: str | None = None,
-                 load_path: str | None = None, all_actions: bool = False, subtask: str | None = None, reach_level_subtask: int = 0):
+                 load_path: str | None = None, all_actions: bool = False, subtask: str | None = None, reach_level_subtask: int = 0,
+                 max_actions: int | None = None, return_sound: bool = False,):
         assert window_type == 'SDL2' or window_type == 'headless'
-        assert subtask is None or subtask in ['initial_boss_battle', 'reach_level']
+        assert subtask is None or subtask in ['initial_boss_battle', 'reach_level', 'reach_boss']
         super().__init__()
-
+        # episode truncation
+        self.max_actions = max_actions
+        self.actions_taken = 0
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
+
         with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
@@ -90,6 +96,7 @@ class FinalFantasyAdventure(Env):
         if self.subtask == 'initial_boss_battle':
             self.prev_boss_hp = 30  # initial boss life
         elif self.subtask == 'reach_level':
+            self.reach_level = reach_level_subtask
             self.current_level = 1
 
         self.reset()
@@ -99,12 +106,18 @@ class FinalFantasyAdventure(Env):
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat | float, bool, bool, dict[str, Any]]:
         self.take_action(action)
+        self.actions_taken += 1
+        done = False
+        if self.max_actions >= self.actions_taken:
+            done = True
+
         obs = self.render()
         info = self.get_info()
 
-        done = True if info['hp'] == 0 else False
+        if info['hp'] == 0:
+            done = True
 
         reward = 0.0
         if self.subtask == 'initial_boss_battle':
@@ -114,6 +127,9 @@ class FinalFantasyAdventure(Env):
             else:
                 reward = self.prev_boss_hp - info['boss_hp']
                 self.prev_boss_hp = info['boss_hp']
+        if self.subtask == 'reach_boss':
+            if info['boss_hp'] != 16711935:  # boss defeated
+                done = True
         elif self.subtask == 'reach_level':
             if info['level'] == self.current_level:
                 done = True
@@ -122,7 +138,10 @@ class FinalFantasyAdventure(Env):
                 reward = info['level'] - self.current_level
                 self.current_level = info['level']
 
-        return obs, reward, done, False, info
+        if self.return_sound:
+            return obs, self.screen.sound, reward, done, False, info
+        else:
+            return obs, reward, done, False, info
 
     def reset(
             self,

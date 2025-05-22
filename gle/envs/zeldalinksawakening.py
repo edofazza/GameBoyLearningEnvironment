@@ -1,4 +1,4 @@
-from typing import Any, SupportsFloat
+from typing import Any, SupportsFloat, Callable, List
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
@@ -96,18 +96,22 @@ class ZeldaLinksAwakening(Env):
 
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
                  start_button: bool = False, max_actions: int | None = None, all_actions: bool = False,
-                 subtask: str | None = None
+                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False,
                  ):
         assert window_type == 'SDL2' or window_type == 'headless'
-        assert subtask is None or subtask in ['get_shield']
         super().__init__()
         self.original_n_death = 0
+        self.shield = False  # holding shield
         # episode truncation
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
 
         self.subtask = subtask
+        if isinstance(subtask, list):
+            self.completed_subtasks = [False] * len(subtask)
 
         with importlib.resources.path('gle.roms', "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
@@ -161,7 +165,7 @@ class ZeldaLinksAwakening(Env):
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         self.take_action(action)
         self.actions_taken += 1
 
@@ -172,12 +176,35 @@ class ZeldaLinksAwakening(Env):
         obs = self.render()
         info = self.get_info()
 
-        if info['deaths_slot1'] > self.original_n_death or info['shield_level']:
+        if info['deaths_slot1'] > self.original_n_death:
             done = True
+
+        if isinstance(self.subtask, list):
+            reward = 0
+            subtasks_done = 0
+            for i, st in enumerate(self.subtask):
+                if not self.completed_subtasks[i]:
+                    subtask_reward = st(info)
+                    if subtask_reward > 0:
+                        self.completed_subtasks[i] = True
+                        subtasks_done += 1
+                    reward += subtask_reward
+                else:
+                    subtasks_done += 1
+            if subtasks_done == len(self.subtask):
+                done = True
+        elif isinstance(self.subtask, Callable):
+            reward = self.subtask(info)
+            done = reward > 0 or done
+        else:
+            reward = 0
 
         reward = info['shield_level'] if self.subtask == 'get_shield' else 0
 
-        return obs, reward, done, False, info
+        if self.return_sound:
+            return obs, self.screen.sound, reward, done, False, info
+        else:
+            return obs, reward, done, False, info
 
     def reset(
             self,
@@ -187,6 +214,9 @@ class ZeldaLinksAwakening(Env):
     ) -> tuple[ObsType, dict[str, Any]]:
         self.close()
         self.actions_taken = 0
+
+        if isinstance(self.subtask, list):
+            self.completed_subtasks = [False] * len(self.subtask)
 
         if self.load_path is None:
             self.skip_game_initial_video()
@@ -237,11 +267,20 @@ class ZeldaLinksAwakening(Env):
     #              UTILITY FUNCTIONS USED IN OVERRIDING
     #   ******************************************************
     def take_action(self, action_idx: int):
-        self.pyboy.send_input(self.actions[action_idx])
-        for i in range(24):
-            if i == 8:
+        if action_idx != 1:
+            self.pyboy.set_memory_value(self.CURRENT_HEALTH_ADDR, 24)
+            self.pyboy.send_input(self.actions[action_idx])
+            for i in range(24):
+                if i == 8:
+                    self.pyboy.send_input(self.release_actions[action_idx])
+                self.pyboy.tick()
+        else:
+            if self.shield:
                 self.pyboy.send_input(self.release_actions[action_idx])
-            self.pyboy.tick()
+                self.shield = False
+            else:
+                self.pyboy.send_input(self.actions[action_idx])
+                self.shield = True
 
     def get_info(self) -> dict:
         return {**self.get_player_info(),
@@ -368,3 +407,26 @@ class ZeldaLinksAwakening(Env):
 
     def read_bcd(self, value) -> int:
         return 10 * ((value >> 4) & 0x0f) + (value & 0x0f)
+
+    #   ******************************************************
+    #                        TASKS
+    #   ******************************************************
+    @staticmethod
+    def recover_shield(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 1
+        return multiplier if info['shield_level'] else 0
+
+    @staticmethod
+    def reach_toronbo_shores(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 2
+        return multiplier if info['destination_data1'] == 255 and info['destination_data2'] == 29 else 0
+
+    @staticmethod
+    def recover_sword(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 3
+        return multiplier if info['sword_level'] else 0
+
+    @staticmethod
+    def collect_secret_shell(info: dict, multiplier: float = 1.0) -> float:
+        # TASK 4
+        return multiplier if info['secret_shells'] else 0

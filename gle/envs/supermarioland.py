@@ -64,7 +64,8 @@ class SuperMarioLand(Env):
     LEVEL_BLOCK_ADDR = 0xC0AB
 
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
-                 max_actions: int | None = None, all_actions: bool = False, world: int = 1, level: int = 1,):
+                 max_actions: int | None = None, all_actions: bool = False, world: int = 1, level: int = 1,
+                 return_sound: bool = False):
         assert window_type == 'SDL2' or window_type == 'headless'
         assert world in [1, 2, 3, 4]
         assert level in [1, 2, 3]
@@ -74,6 +75,8 @@ class SuperMarioLand(Env):
         self.actions_taken = 0
         self.window_type = window_type
         self.prev_score = None
+        # Sound
+        self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
             self.pyboy = PyBoy(
@@ -141,7 +144,7 @@ class SuperMarioLand(Env):
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         self.take_action(action)
         obs = self.render()
         info = self.get_info()
@@ -150,7 +153,10 @@ class SuperMarioLand(Env):
         if info['game_over']:
             done = True
 
-        return obs, self.get_reward_distance(info['level_progress']), done, False, info # obs, self.get_reward_(info['score']), done, False, info
+        if self.return_sound:
+            return obs, self.screen.sound, self.get_reward_distance(info['level_progress']), done, False, info
+        else:
+            return obs, self.get_reward_distance(info['level_progress']), done, False, info # obs, self.get_reward_(info['score']), done, False, info
 
     def reset(
             self,

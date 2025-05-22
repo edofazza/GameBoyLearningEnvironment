@@ -24,8 +24,8 @@ class SolomonsClub(Env):
     MONEY_ADDR = [0xFFCC, 0xFFCD, 0xFFCE]   # big endian
 
     def __init__(self, level: int = 1, room: int = 1, window_type: str = 'headless',
-                 save_path: str | None = None, load_path: str | None = None, all_actions: bool = False
-                 ):
+                 save_path: str | None = None, load_path: str | None = None, all_actions: bool = False,
+                 return_sound: bool = False,):
         assert 1 <= level <= 5, 'Level must be between 1 and 5'
         assert 1 <= room <= 10, 'Room must be between 1 and 10'
         assert window_type == 'SDL2' or window_type == 'headless'
@@ -36,6 +36,8 @@ class SolomonsClub(Env):
         self.prev_lives = None
         self.prev_money = None
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
@@ -94,7 +96,7 @@ class SolomonsClub(Env):
     #   ******************************************************
     def step(
         self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         self.take_action(action)
         obs = self.render()
         info = self.get_info()
@@ -104,7 +106,11 @@ class SolomonsClub(Env):
         else:
             done = False
 
-        return obs, self.reward(info['money'], info['remaining_time'], info['lives']), done, False, info
+        if self.return_sound:
+            return obs, self.screen.sound, self.reward(info['money'], info['remaining_time'],
+                                                       info['lives']), done, False, info
+        else:
+            return obs, self.reward(info['money'], info['remaining_time'], info['lives']), done, False, info
 
     def reset(
         self,

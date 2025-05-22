@@ -1,4 +1,4 @@
-from typing import Any, SupportsFloat
+from typing import Any, SupportsFloat, Callable, List
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
@@ -39,7 +39,7 @@ class DonkeyKongLand3(Env):
 
     # HRAM
     CURRENT_LEVEL_ADDR = 0xFFA6
-    #    00 - Seabed Shanty
+    #    00 - Seabed Shanty (consider always +1)
     #    01 - Coral Quarrel
     #    02 - Deep Reef Grief
     #    03 - Total Rekoil
@@ -115,7 +115,8 @@ class DonkeyKongLand3(Env):
     BOSS_LEVEL_DATA_ADDRS = [0xA040, 0xA045]  # bit 6: if bonus coin is collected, bit 1: cleared
 
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
-                 max_actions: int | None = None, all_actions: bool = False):
+                 max_actions: int | None = None, all_actions: bool = False,
+                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False,):
         assert window_type == 'SDL2' or window_type == 'headless'
         super().__init__()
         self.prev_action_idx = None
@@ -123,6 +124,10 @@ class DonkeyKongLand3(Env):
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        # Sound
+        self.return_sound = return_sound
+
+        self.subtask = subtask
 
         with importlib.resources.path('gle.roms', "Donkey Kong Land III (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
@@ -174,14 +179,18 @@ class DonkeyKongLand3(Env):
 
         self.screen = self.pyboy.botsupport_manager().screen()
 
-        self.reset()
+        self.original_distance = 0
+        _, info = self.reset()
+        self.pyboy.set_memory_value(self.NUMBER_HITS_REMAINING_ADDR, 0)
+        self.prev_distance = info['x_pos']
+        self.original_distance = self.prev_distance
 
     #   ******************************************************
     #               GYMNASIUM OVERRIDING FUNCTION
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat | float, bool, bool, dict[str, Any]]:
         self.take_action(action)
 
         self.actions_taken += 1
@@ -195,7 +204,13 @@ class DonkeyKongLand3(Env):
         if info['lives'] == 4:
             done = True
 
-        return obs, self.get_reward(info['x_pos']), done, False, info     # TODO: reset reward to x_pose
+        if self.subtask is not None:
+            done = done or self.subtask(info)
+
+        if self.return_sound:
+            return obs, self.screen.sound, self.get_reward(info['x_pos']), done, False, info
+        else:
+            return obs, self.get_reward(info['x_pos']), done, False, info
 
     def reset(
             self,
@@ -205,7 +220,7 @@ class DonkeyKongLand3(Env):
     ) -> tuple[ObsType, dict[str, Any]]:
         self.close()
         self.prev_action_idx = None
-        self.prev_distance = None
+        self.prev_distance = self.original_distance
         self.actions_taken = 0
 
         if self.load_path is None:
@@ -404,3 +419,22 @@ class DonkeyKongLand3(Env):
         tmp['all_kremkoins_found'] = value & (1 << 6) != 0
         tmp['dixie'] = value & (1 << 7) != 0
         return tmp
+
+    #   ******************************************************
+    #                        TASKS
+    #   ******************************************************
+    @staticmethod
+    def level_1(info: dict) -> bool:
+        return info['x_pos'] == 4748
+
+    @staticmethod
+    def level_2(info: dict) -> bool:
+        return info['x_pos'] == 2207
+
+    @staticmethod
+    def level_3(info: dict) -> bool:
+        return info['x_pos'] == 6015
+
+    @staticmethod
+    def level_4(info: dict) -> bool:
+        return info['x_pos'] == 124 and info['y_pos'] == 195
