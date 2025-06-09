@@ -22,5 +22,11 @@ env = PokemonBlueRed(load_path='states/pokemon_red/pokemon_red_squirtle_after_ri
 To cite the article please use:
 
 ```latex
-In progress...
+@article{fazzari2025game,
+  title={The Game Boy Learning Environment},
+  author={Fazzari, Edoardo and Romano, Donato and Falchi, Fabrizio and Stefanini, Cesare},
+  journal={IEEE Transactions on Games},
+  year={2025},
+  publisher={IEEE}
+}
 ```
