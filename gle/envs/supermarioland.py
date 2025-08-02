@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -63,10 +64,9 @@ class SuperMarioLand(Env):
     # LEVEL BLOCK INFO
     LEVEL_BLOCK_ADDR = 0xC0AB
 
-    def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
+    def __init__(self, window_type: str = 'null', save_path: str | None = None, load_path: str | None = None,
                  max_actions: int | None = None, all_actions: bool = False, world: int = 1, level: int = 1,
-                 return_sound: bool = False):
-        assert window_type == 'SDL2' or window_type == 'headless'
+                 return_sound: bool = False, rgba: bool = False,):
         assert world in [1, 2, 3, 4]
         assert level in [1, 2, 3]
 
@@ -75,13 +75,14 @@ class SuperMarioLand(Env):
         self.actions_taken = 0
         self.window_type = window_type
         self.prev_score = None
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.world = world
@@ -93,7 +94,7 @@ class SuperMarioLand(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -131,10 +132,13 @@ class SuperMarioLand(Env):
                 [WindowEvent.RELEASE_ARROW_LEFT, WindowEvent.RELEASE_BUTTON_A, WindowEvent.RELEASE_BUTTON_B]
             ]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
         self.prev_action_idx = None
         self.reset()
@@ -154,7 +158,7 @@ class SuperMarioLand(Env):
             done = True
 
         if self.return_sound:
-            return obs, self.screen.sound, self.get_reward_distance(info['level_progress']), done, False, info
+            return obs, self.pyboy.sound.ndarray, self.get_reward_distance(info['level_progress']), done, False, info
         else:
             return obs, self.get_reward_distance(info['level_progress']), done, False, info # obs, self.get_reward_(info['score']), done, False, info
 
@@ -176,7 +180,10 @@ class SuperMarioLand(Env):
         return self.render(), self.get_info()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -184,23 +191,21 @@ class SuperMarioLand(Env):
         with importlib.resources.path('gle.roms', "Super Mario Land (JUE) (V1.1) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                FUNCTION FOR MOVING IN THE GAME
     #   ******************************************************
     def skip_game_initial_video(self):
-        while not self.pyboy.tick():
-            if self.pyboy.frame_count == 180:
-                self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-            if self.pyboy.frame_count == 185:
-                self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
-            if self.pyboy.frame_count == 200:
-                break
+        self.pyboy.tick(180)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(15)
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -229,8 +234,8 @@ class SuperMarioLand(Env):
             self.pyboy.override_memory_value(0, i, 0x00)
 
         patch1 = [
-            0x3E,   # LD A, d8
-            (world << 4) | (level & 0x0F), # d8
+            0x3E,  # LD A, d8
+            (world << 4) | (level & 0x0F),  # d8
         ]
 
         for i, byte in enumerate(patch1):
@@ -243,12 +248,10 @@ class SuperMarioLand(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
         else:  # different action
             # release previous actions
             old_actions_to_be_released = self.release_actions[self.prev_action_idx]
@@ -265,46 +268,45 @@ class SuperMarioLand(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
 
     def get_info(self) -> dict:
         info = dict()
 
-        info['lives'] = int(str(self.pyboy.get_memory_value(self.LIVES_DISPLAYED_ADDR[0])) + str(self.pyboy.get_memory_value(self.LIVES_DISPLAYED_ADDR[1])))
-        info['lives_earned_lost'] = self.pyboy.get_memory_value(self.LIVES_EARNED_LOST_ADDR)
-        info['level_progress'] = (self.pyboy.get_memory_value(self.LEVEL_BLOCK_ADDR) * 16 +
+        info['lives'] = int(
+            str(self.pyboy.memory[self.LIVES_DISPLAYED_ADDR[0]]) + str(self.pyboy.memory[self.LIVES_DISPLAYED_ADDR[1]]))
+        info['lives_earned_lost'] = self.pyboy.memory[self.LIVES_EARNED_LOST_ADDR]
+        info['level_progress'] = (self.pyboy.memory[self.LEVEL_BLOCK_ADDR] * 16 +
                                   (self.screen.tilemap_position_list()[16][0] - 7) % 16 +
-                                  self.pyboy.get_memory_value(self.MARIO_X_POS_RELATIVE_SCREEN_ADDR))
-        info['world'] = self.pyboy.get_memory_value(self.CURRENT_WORLD_ADDR)
-        info['stage'] = self.pyboy.get_memory_value(self.CURRENT_STAGE_ADDR)
-        info['time'] = (100 * self.read_bcd(self.pyboy.get_memory_value(self.TIMER_HUNDREDS_ADDR))
-                        + 10 * self.read_bcd(self.pyboy.get_memory_value(self.TIMER_TENS_ADDR))
-                        + self.read_bcd(self.pyboy.get_memory_value(self.TIMER_ONES_ADDR)))
-        info['x_pos_screen'] = self.pyboy.get_memory_value(self.MARIO_X_POS_RELATIVE_SCREEN_ADDR)
-        info['y_pos_screen'] = self.pyboy.get_memory_value(self.MARIO_Y_POS_RELATIVE_SCREEN_ADDR)
+                                  self.pyboy.memory[self.MARIO_X_POS_RELATIVE_SCREEN_ADDR])
+        info['world'] = self.pyboy.memory[self.CURRENT_WORLD_ADDR]
+        info['stage'] = self.pyboy.memory[self.CURRENT_STAGE_ADDR]
+        info['time'] = (100 * self.read_bcd(self.pyboy.memory[self.TIMER_HUNDREDS_ADDR])
+                        + 10 * self.read_bcd(self.pyboy.memory[self.TIMER_TENS_ADDR])
+                        + self.read_bcd(self.pyboy.memory[self.TIMER_ONES_ADDR]))
+        info['x_pos_screen'] = self.pyboy.memory[self.MARIO_X_POS_RELATIVE_SCREEN_ADDR]
+        info['y_pos_screen'] = self.pyboy.memory[self.MARIO_Y_POS_RELATIVE_SCREEN_ADDR]
         info['score'] = self.decode_score()
-        info['coins'] = (10 * self.read_bcd(self.pyboy.get_memory_value(self.COINS_TENS_ADDR))
-                         + self.read_bcd(self.pyboy.get_memory_value(self.COINS_ONES_ADDR)))
-        info['pose'] = self.pyboy.get_memory_value(self.MARIO_POSE_ADDR)
-        info['facing'] = 'left' if self.pyboy.get_memory_value(self.MARIO_FACING_DIRECTION_ADDR) == 0x20 else 'right'
-        info['on_ground'] = self.pyboy.get_memory_value(self.MARIO_ON_GROUND_FLAG_ADDR) == 0x01
-        info['game_over'] = self.pyboy.get_memory_value(self.GAME_OVER_ADDR) == 0x39
-        info['superball_time_left'] = self.pyboy.get_memory_value(self.SUPERBALL_TIME_LEFT_ADDR)
-        info['has_superball'] = self.pyboy.get_memory_value(self.MARIO_HAS_SUPERBALL_ADDR) == 0x02
-        info['dead_jump_timer'] = self.pyboy.get_memory_value(self.MARIO_DEAD_JUMP_TIMER_ADDR)
-        info['starman_timer'] = self.pyboy.get_memory_value(self.MARIO_STARMAN_TIMER_ADDR)
+        info['coins'] = (10 * self.read_bcd(self.pyboy.memory[self.COINS_TENS_ADDR])
+                         + self.read_bcd(self.pyboy.memory[self.COINS_ONES_ADDR]))
+        info['pose'] = self.pyboy.memory[self.MARIO_POSE_ADDR]
+        info['facing'] = 'left' if self.pyboy.memory[self.MARIO_FACING_DIRECTION_ADDR] == 0x20 else 'right'
+        info['on_ground'] = self.pyboy.memory[self.MARIO_ON_GROUND_FLAG_ADDR] == 0x01
+        info['game_over'] = self.pyboy.memory[self.GAME_OVER_ADDR] == 0x39
+        info['superball_time_left'] = self.pyboy.memory[self.SUPERBALL_TIME_LEFT_ADDR]
+        info['has_superball'] = self.pyboy.memory[self.MARIO_HAS_SUPERBALL_ADDR] == 0x02
+        info['dead_jump_timer'] = self.pyboy.memory[self.MARIO_DEAD_JUMP_TIMER_ADDR]
+        info['starman_timer'] = self.pyboy.memory[self.MARIO_STARMAN_TIMER_ADDR]
         info['jumping_routing'] = self.decode_jumping_routine()
-        info['x_speed'] = self.pyboy.get_memory_value(self.MARIO_X_SPEED_ADDR)
-        info['y_speed'] = self.pyboy.get_memory_value(self.MARIO_Y_SPEED_ADDR)
-        info['low_jump'] = self.pyboy.get_memory_value(self.MARIO_LOW_JUMP_ADDR)
-        info['music_track'] = self.pyboy.get_memory_value(self.MUSIC_TRACK_ADDR)
-        info['powerup'] = self.pyboy.get_memory_value(self.POWERUP_STATUS_ADDR)
-        info['powerup_timer'] = self.pyboy.get_memory_value(self.POWERUP_STATUS_TIMER_ADDR)
+        info['x_speed'] = self.pyboy.memory[self.MARIO_X_SPEED_ADDR]
+        info['y_speed'] = self.pyboy.memory[self.MARIO_Y_SPEED_ADDR]
+        info['low_jump'] = self.pyboy.memory[self.MARIO_LOW_JUMP_ADDR]
+        info['music_track'] = self.pyboy.memory[self.MUSIC_TRACK_ADDR]
+        info['powerup'] = self.pyboy.memory[self.POWERUP_STATUS_ADDR]
+        info['powerup_timer'] = self.pyboy.memory[self.POWERUP_STATUS_TIMER_ADDR]
         return info
 
     def get_reward(self, score) -> int:
@@ -324,6 +326,7 @@ class SuperMarioLand(Env):
             reward = score - self.prev_score
             self.prev_score = score
             return reward
+
     #   ******************************************************
     #                        UTILITIES
     #   ******************************************************
@@ -331,7 +334,7 @@ class SuperMarioLand(Env):
         return 10 * ((value >> 4) & 0x0f) + (value & 0x0f)
 
     def decode_jumping_routine(self) -> str:
-        value = self.pyboy.get_memory_value(self.MARIO_JUMPING_ROUTINE_ADDR)
+        value = self.pyboy.memory[self.MARIO_JUMPING_ROUTINE_ADDR]
         if value == 0x00:
             return 'not jumping'
         elif value == 0x01:
@@ -344,7 +347,7 @@ class SuperMarioLand(Env):
     def decode_score(self) -> int:
         score = 0
         for i, addr in enumerate(range(self.SCORE_ADDRS[0], self.SCORE_ADDRS[1] + 1)):
-            value = self.pyboy.get_memory_value(addr)
+            value = self.pyboy.memory[addr]
             if value > 9:
                 continue
             else:

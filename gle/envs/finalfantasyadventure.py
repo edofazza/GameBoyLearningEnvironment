@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -20,7 +21,7 @@ class FinalFantasyAdventure(Env):
     CURRENT_HP_ADDRS = [0xD7B2, 0xD7B3]
     MAX_HP_ADDRS = [0xD7B4, 0xD7B5]  # Limited at 0xE703 (999) (little endian)
     CURRENT_MP_ADDRS = [0xD7B6, 0xD7B7]
-    MAX_MP_ADDRS = [0xD7B8, 0xD7B9]  # Limited at 0x6200 (98)  (little endian)
+    MAX_MP_ADDRS = [0xD7B8, 0xD7B9]  # Limited at 0x6200 (98) (little endian)
     LEVEL_ADDR = 0xD7BA  # Limited at 0x63 (99), however the game lets you level up again!
     EXPERIENCE_ADDRS = [0xD7BB, 0xD7BD]  # 3 addresses Limited at 0xFFFF0F (1048575). It will lock the game in a constant level up loop, if you reach this value!
     LUCRE_ADDRS = [0xD7BE, 0xD7BF]  # limited at 0xFFFF (65535)
@@ -32,23 +33,23 @@ class FinalFantasyAdventure(Env):
     DEFENSE_POWER_ADDR = 0xD7E0  # Limited at 0xFF (255)
     DEATHBLOW_GAUGE_ADDR = 0xD858  # Limited at 0x40, higher values are brought to this mark, except 0xFF that resets to 0.
 
-    def __init__(self, start_button: bool = False, window_type: str = 'headless', save_path: str | None = None,
+    def __init__(self, start_button: bool = False, window_type: str = 'null', save_path: str | None = None,
                  load_path: str | None = None, all_actions: bool = False, subtask: str | None = None, reach_level_subtask: int = 0,
-                 max_actions: int | None = None, return_sound: bool = False,):
-        assert window_type == 'SDL2' or window_type == 'headless'
+                 max_actions: int | None = None, return_sound: bool = False, rgba: bool = False,):
         assert subtask is None or subtask in ['initial_boss_battle', 'reach_level', 'reach_boss']
         super().__init__()
         # episode truncation
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.pyboy.set_emulation_speed(6)
@@ -57,7 +58,7 @@ class FinalFantasyAdventure(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -87,10 +88,13 @@ class FinalFantasyAdventure(Env):
             self.actions += [WindowEvent.PRESS_BUTTON_START]
             self.release_actions += [WindowEvent.RELEASE_BUTTON_START]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
         self.subtask = subtask
         if self.subtask == 'initial_boss_battle':
@@ -139,7 +143,7 @@ class FinalFantasyAdventure(Env):
                 self.current_level = info['level']
 
         if self.return_sound:
-            return obs, self.screen.sound, reward, done, False, info
+            return obs, self.pyboy.sound.ndarray, reward, done, False, info
         else:
             return obs, reward, done, False, info
 
@@ -157,7 +161,10 @@ class FinalFantasyAdventure(Env):
         return self.render(), self.get_info()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -165,11 +172,11 @@ class FinalFantasyAdventure(Env):
         with importlib.resources.path('gle.roms', "Final Fantasy Adventure (USA).gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -187,42 +194,41 @@ class FinalFantasyAdventure(Env):
     #   ******************************************************
     def take_action(self, action_idx: int):
         self.pyboy.send_input(self.actions[action_idx])
-        for i in range(15):
-            if i == 4:
-                self.pyboy.send_input(self.release_actions[action_idx])
-            self.pyboy.tick()
+        self.pyboy.tick(3)
+        self.pyboy.send_input(self.release_actions[action_idx])
+        self.pyboy.tick(12)
 
     def get_info(self) -> dict:
         info = dict()
         info['hero_name'] = self.decode_name(self.HERO_NAME_ADDRS)
         info['heroin_name'] = self.decode_name(self.HEROIN_NAME_ADDRS)
-        info['hp'] = int.from_bytes(self.pyboy.get_memory_value(self.CURRENT_HP_ADDRS[1]).to_bytes(2, byteorder='big')
-                                    + self.pyboy.get_memory_value(self.CURRENT_HP_ADDRS[0]).to_bytes(2, byteorder='big'),
+        info['hp'] = int.from_bytes(self.pyboy.memory[self.CURRENT_HP_ADDRS[1]].to_bytes(2, byteorder='big')
+                                    + self.pyboy.memory[self.CURRENT_HP_ADDRS[0]].to_bytes(2, byteorder='big'),
                                     byteorder='big')
-        info['max_hp'] = int.from_bytes(self.pyboy.get_memory_value(self.MAX_HP_ADDRS[1]).to_bytes(2, byteorder='big')
-                                        + self.pyboy.get_memory_value(self.MAX_HP_ADDRS[0]).to_bytes(2, byteorder='big'),
+        info['max_hp'] = int.from_bytes(self.pyboy.memory[self.MAX_HP_ADDRS[1]].to_bytes(2, byteorder='big')
+                                        + self.pyboy.memory[self.MAX_HP_ADDRS[0]].to_bytes(2, byteorder='big'),
                                         byteorder='big')
-        info['mp'] = int.from_bytes(self.pyboy.get_memory_value(self.CURRENT_MP_ADDRS[1]).to_bytes(2, byteorder='big')
-                                    + self.pyboy.get_memory_value(self.CURRENT_MP_ADDRS[0]).to_bytes(2, byteorder='big'),
+        info['mp'] = int.from_bytes(self.pyboy.memory[self.CURRENT_MP_ADDRS[1]].to_bytes(2, byteorder='big')
+                                    + self.pyboy.memory[self.CURRENT_MP_ADDRS[0]].to_bytes(2, byteorder='big'),
                                     byteorder='big')
-        info['max_mp'] = int.from_bytes(self.pyboy.get_memory_value(self.MAX_MP_ADDRS[1]).to_bytes(2, byteorder='big')
-                                        + self.pyboy.get_memory_value(self.MAX_MP_ADDRS[0]).to_bytes(2, byteorder='big'),
+        info['max_mp'] = int.from_bytes(self.pyboy.memory[self.MAX_MP_ADDRS[1]].to_bytes(2, byteorder='big')
+                                        + self.pyboy.memory[self.MAX_MP_ADDRS[0]].to_bytes(2, byteorder='big'),
                                         byteorder='big')
-        info['level'] = self.pyboy.get_memory_value(self.LEVEL_ADDR)
-        info['stamina'] = self.pyboy.get_memory_value(self.STAMINA_ADDR)
-        info['power'] = self.pyboy.get_memory_value(self.POWER_ADDR)
-        info['wisdom'] = self.pyboy.get_memory_value(self.WISDOM_ADDR)
-        info['will'] = self.pyboy.get_memory_value(self.WILL_ADDR)
-        info['atk'] = self.pyboy.get_memory_value(self.ATTACK_POWER_ADDR)
-        info['def'] = self.pyboy.get_memory_value(self.DEFENSE_POWER_ADDR)
-        info['lucre'] = int.from_bytes(self.pyboy.get_memory_value(self.LUCRE_ADDRS[1]).to_bytes(2, byteorder='big')
-                                       + self.pyboy.get_memory_value(self.LUCRE_ADDRS[0]).to_bytes(2, byteorder='big'),
+        info['level'] = self.pyboy.memory[self.LEVEL_ADDR]
+        info['stamina'] = self.pyboy.memory[self.STAMINA_ADDR]
+        info['power'] = self.pyboy.memory[self.POWER_ADDR]
+        info['wisdom'] = self.pyboy.memory[self.WISDOM_ADDR]
+        info['will'] = self.pyboy.memory[self.WILL_ADDR]
+        info['atk'] = self.pyboy.memory[self.ATTACK_POWER_ADDR]
+        info['def'] = self.pyboy.memory[self.DEFENSE_POWER_ADDR]
+        info['lucre'] = int.from_bytes(self.pyboy.memory[self.LUCRE_ADDRS[1]].to_bytes(2, byteorder='big')
+                                       + self.pyboy.memory[self.LUCRE_ADDRS[0]].to_bytes(2, byteorder='big'),
                                        byteorder='big')
         info['deathblow_gauge'] = self.decode_deathblow()
         info['exp'] = self.decode_exp(self.EXPERIENCE_ADDRS)
         info['needed_exp'] = self.decode_needed_exp(self.EXPERIENCE_NEEDED_LEVEL_UP_ADDRS)
-        info['boss_hp'] = int.from_bytes(self.pyboy.get_memory_value(self.BOSS_HP_ADDRS[1]).to_bytes(2, byteorder='big')
-                                         + self.pyboy.get_memory_value(self.BOSS_HP_ADDRS[0]).to_bytes(2, byteorder='big'),
+        info['boss_hp'] = int.from_bytes(self.pyboy.memory[self.BOSS_HP_ADDRS[1]].to_bytes(2, byteorder='big')
+                                         + self.pyboy.memory[self.BOSS_HP_ADDRS[0]].to_bytes(2, byteorder='big'),
                                          byteorder='big')
         info['item'] = self.decode_item_bag()
         info['equipment'] = self.decode_equipment()
@@ -230,20 +236,21 @@ class FinalFantasyAdventure(Env):
 
     def get_reward(self, boss_hp: int) -> int:
         return 0
+
     #   ******************************************************
     #                        UTILITIES
     #   ******************************************************
     def decode_name(self, addrs) -> str:
         name = str()
         for addr in range(addrs[0], addrs[1] + 1):
-            value = self.pyboy.get_memory_value(addr)
+            value = self.pyboy.memory[addr]
             if value == 0x00:
                 continue
             name += chr(value - 0x79)
         return name
 
     def decode_deathblow(self) -> int:
-        value = self.pyboy.get_memory_value(self.DEATHBLOW_GAUGE_ADDR)
+        value = self.pyboy.memory[self.DEATHBLOW_GAUGE_ADDR]
         if value == 0xFF:
             value = 0x00
         elif value > 0x40:
@@ -253,28 +260,28 @@ class FinalFantasyAdventure(Env):
     def decode_exp(self, addrs: list) -> int:
         exp_bytes = bytes()
         for addr in range(addrs[0], addrs[1] + 1)[::-1]:
-            exp_bytes += self.pyboy.get_memory_value(addr).to_bytes(2, byteorder='big')
+            exp_bytes += self.pyboy.memory[addr].to_bytes(2, byteorder='big')
         return int.from_bytes(exp_bytes, byteorder='big')
 
     def decode_needed_exp(self, addrs: list) -> int:
         exp_str = str()
         for addr in range(addrs[0], addrs[1] + 1)[::-1]:
-            exp_str += str(self.read_bcd(self.pyboy.get_memory_value(addr)))
+            exp_str += str(self.read_bcd(self.pyboy.memory[addr]))
         return int(exp_str)
 
     def decode_item_bag(self) -> dict:
         item_info = dict()
         for i, addr in enumerate(range(self.ITEM_BAG_ADDRS[0], self.ITEM_BAG_ADDRS[1] + 1)):
-            item_info[f'item{i}'] = self.pyboy.get_memory_value(addr)
+            item_info[f'item{i}'] = self.pyboy.memory[addr]
         return item_info
 
     def decode_equipment(self) -> dict:
         equip_info = dict()
         for addr_id, addr_qt in zip(range(self.EQUIPMENT_BAG_ADDRS[0], self.EQUIPMENT_BAG_ADDRS[1] + 1),
                                     range(self.POWER_EQUIPMENT_BAG_ADDRS[0], self.POWER_EQUIPMENT_BAG_ADDRS[1] + 1)):
-            id = self.pyboy.get_memory_value(addr_id)
+            id = self.pyboy.memory[addr_id]
             if id != 0:
-                equip_info[f'equip_{id}'] = self.pyboy.get_memory_value(addr_qt)
+                equip_info[f'equip_{id}'] = self.pyboy.memory[addr_qt]
         return equip_info
 
     def read_bcd(self, value):

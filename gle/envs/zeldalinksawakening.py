@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat, Callable, List
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -94,14 +95,14 @@ class ZeldaLinksAwakening(Env):
         b'\xF3': 'RIGHT'
     }
 
-    def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
+    def __init__(self, window_type: str = 'null', save_path: str | None = None, load_path: str | None = None,
                  start_button: bool = False, max_actions: int | None = None, all_actions: bool = False,
-                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False,
+                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False, rgba: bool = False,
                  ):
-        assert window_type == 'SDL2' or window_type == 'headless'
         super().__init__()
         self.original_n_death = 0
         self.shield = False  # holding shield
+        self.rgba = rgba
         # episode truncation
         self.max_actions = max_actions
         self.actions_taken = 0
@@ -116,7 +117,7 @@ class ZeldaLinksAwakening(Env):
         with importlib.resources.path('gle.roms', "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.save_path = save_path
@@ -124,7 +125,7 @@ class ZeldaLinksAwakening(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -154,10 +155,13 @@ class ZeldaLinksAwakening(Env):
             self.actions += [WindowEvent.PRESS_BUTTON_START]
             self.release_actions += [WindowEvent.RELEASE_BUTTON_START]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
         self.reset()
 
     #   ******************************************************
@@ -165,7 +169,8 @@ class ZeldaLinksAwakening(Env):
     #   ******************************************************
     def step(
             self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
+    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]] | tuple[
+        ObsType, np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         self.take_action(action)
         self.actions_taken += 1
 
@@ -199,10 +204,8 @@ class ZeldaLinksAwakening(Env):
         else:
             reward = 0
 
-        reward = info['shield_level'] if self.subtask == 'get_shield' else 0
-
         if self.return_sound:
-            return obs, self.screen.sound, reward, done, False, info
+            return obs, self.pyboy.sound.ndarray, reward, done, False, info
         else:
             return obs, reward, done, False, info
 
@@ -225,7 +228,10 @@ class ZeldaLinksAwakening(Env):
         return self.render(), self.get_info()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -234,23 +240,25 @@ class ZeldaLinksAwakening(Env):
                                       "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                FUNCTION FOR MOVING IN THE GAME
     #   ******************************************************
     def skip_game_initial_video(self):
-        while not self.pyboy.tick():
-            if self.pyboy.frame_count == 180 or self.pyboy.frame_count == 230:
-                self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-            if self.pyboy.frame_count == 185 or self.pyboy.frame_count == 235:
-                self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
-            if self.pyboy.frame_count == 280:
-                break
+        self.pyboy.tick(180)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(45)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(45)
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -268,12 +276,10 @@ class ZeldaLinksAwakening(Env):
     #   ******************************************************
     def take_action(self, action_idx: int):
         if action_idx != 1:
-            self.pyboy.set_memory_value(self.CURRENT_HEALTH_ADDR, 24)
             self.pyboy.send_input(self.actions[action_idx])
-            for i in range(24):
-                if i == 8:
-                    self.pyboy.send_input(self.release_actions[action_idx])
-                self.pyboy.tick()
+            self.pyboy.tick(8)
+            self.pyboy.send_input(self.release_actions[action_idx])
+            self.pyboy.tick(16)
         else:
             if self.shield:
                 self.pyboy.send_input(self.release_actions[action_idx])
@@ -294,68 +300,71 @@ class ZeldaLinksAwakening(Env):
     def get_player_info(self) -> dict:
         info = dict()
         info['hearts'] = self.decode_hearts(self.CURRENT_HEALTH_ADDR)
-        info['max_hearts'] = self.pyboy.get_memory_value(self.MAXIMUM_HEALTH_ADDR)
-        info['sword_level'] = self.pyboy.get_memory_value(self.SWORD_LEVEL_ADDR)
-        info['shield_level'] = self.pyboy.get_memory_value(self.SHIELD_LEVEL_ADDR)
-        info['bracelet_level'] = self.pyboy.get_memory_value(self.POWER_BRACELET_LEVEL_ADDR)
+        info['max_hearts'] = self.pyboy.memory[self.MAXIMUM_HEALTH_ADDR]
+        info['sword_level'] = self.pyboy.memory[self.SWORD_LEVEL_ADDR]
+        info['shield_level'] = self.pyboy.memory[self.SHIELD_LEVEL_ADDR]
+        info['bracelet_level'] = self.pyboy.memory[self.POWER_BRACELET_LEVEL_ADDR]
         info['rupees'] = self.decode_rupees()
-        info['deaths_slot1'] = self.pyboy.get_memory_value(self.NUMBER_OF_DEATHS_SLOT1_ADDR)
-        info['deaths_slot2'] = self.pyboy.get_memory_value(self.NUMBER_OF_DEATHS_SLOT2_ADDR)
-        info['deaths_slot3'] = self.pyboy.get_memory_value(self.NUMBER_OF_DEATHS_SLOT3_ADDR)
-        info['x_pos'] = self.pyboy.get_memory_value(self.X_POS_ADDR)
-        info['y_pos'] = self.pyboy.get_memory_value(self.Y_POS_ADDR)
-        info['destination_data1'] = self.pyboy.get_memory_value(self.DESTINATION_DATA1_ADDR)
-        info['destination_data2'] = self.pyboy.get_memory_value(self.DESTINATION_DATA2_ADDR)
-        info['room'] = self.pyboy.get_memory_value(self.ROOM_NUMBER_ADDR)
+        info['deaths_slot1'] = self.pyboy.memory[self.NUMBER_OF_DEATHS_SLOT1_ADDR]
+        info['deaths_slot2'] = self.pyboy.memory[self.NUMBER_OF_DEATHS_SLOT2_ADDR]
+        info['deaths_slot3'] = self.pyboy.memory[self.NUMBER_OF_DEATHS_SLOT3_ADDR]
+        info['x_pos'] = self.pyboy.memory[self.X_POS_ADDR]
+        info['y_pos'] = self.pyboy.memory[self.Y_POS_ADDR]
+        info['destination_data1'] = self.pyboy.memory[self.DESTINATION_DATA1_ADDR]
+        info['destination_data2'] = self.pyboy.memory[self.DESTINATION_DATA2_ADDR]
+        info['room'] = self.pyboy.memory[self.ROOM_NUMBER_ADDR]
         return info
 
     def get_items_info(self) -> dict:
         info = dict()
-        info['held_item1'] = self.pyboy.get_memory_value(self.CURRENT_HELD_ITEMS_ADDRS[0])
-        info['held_item2'] = self.pyboy.get_memory_value(self.CURRENT_HELD_ITEMS_ADDRS[1])
+        info['held_item1'] = self.pyboy.memory[self.CURRENT_HELD_ITEMS_ADDRS[0]]
+        info['held_item2'] = self.pyboy.memory[self.CURRENT_HELD_ITEMS_ADDRS[1]]
         info['inventory'] = self.decode_inventory()
-        info['flipper'] = self.pyboy.get_memory_value(self.FLIPPER_ADDR) == 0x01
-        info['potion'] = self.pyboy.get_memory_value(self.POTION_ADDR) == 0x01
+        info['flipper'] = self.pyboy.memory[self.FLIPPER_ADDR] == 0x01
+        info['potion'] = self.pyboy.memory[self.POTION_ADDR] == 0x01
         info['item_trading_game'] = self.decode_trading_game_item()
-        info['secret_shells'] = self.pyboy.get_memory_value(self.NUMBER_SECRET_SHELLS_ADDR)
-        info['gold_leaves'] = self.pyboy.get_memory_value(self.NUMBER_GOLD_LEAVES_ADDR)
-        info['arrows'] = self.pyboy.get_memory_value(self.NUMBER_ARROWS_ADDR)
-        info['max_arrows'] = self.pyboy.get_memory_value(self.MAX_ARROWS_ADDR)
-        info['magic_powder'] = self.pyboy.get_memory_value(self.MAGIC_POWDER_QUANTITY_ADDR)
-        info['max_magic_powder'] = self.pyboy.get_memory_value(self.MAX_MAGIC_POWDER_ADDR)
-        info['bombs'] = self.pyboy.get_memory_value(self.NUMBER_BOMBS_ADDR)
-        info['max_bombs'] = self.pyboy.get_memory_value(self.MAX_BOMBS_ADDR)
-        info['ocarina_songs_possessed'] = self.pyboy.get_memory_value(self.OCARINA_SONGS_POSSESSION_ADDR)
-        info['selected_ocarina_song'] = self.pyboy.get_memory_value(self.OCARINA_SELECTED_SONG_ADDR)
-        info['keys'] = self.pyboy.get_memory_value(self.NUMBER_POSSESSED_KEYS_ADDR)
+        info['secret_shells'] = self.pyboy.memory[self.NUMBER_SECRET_SHELLS_ADDR]
+        info['gold_leaves'] = self.pyboy.memory[self.NUMBER_GOLD_LEAVES_ADDR]
+        info['arrows'] = self.pyboy.memory[self.NUMBER_ARROWS_ADDR]
+        info['max_arrows'] = self.pyboy.memory[self.MAX_ARROWS_ADDR]
+        info['magic_powder'] = self.pyboy.memory[self.MAGIC_POWDER_QUANTITY_ADDR]
+        info['max_magic_powder'] = self.pyboy.memory[self.MAX_MAGIC_POWDER_ADDR]
+        info['bombs'] = self.pyboy.memory[self.NUMBER_BOMBS_ADDR]
+        info['max_bombs'] = self.pyboy.memory[self.MAX_BOMBS_ADDR]
+        info['ocarina_songs_possessed'] = self.pyboy.memory[self.OCARINA_SONGS_POSSESSION_ADDR]
+        info['selected_ocarina_song'] = self.pyboy.memory[self.OCARINA_SELECTED_SONG_ADDR]
+        info['keys'] = self.pyboy.memory[self.NUMBER_POSSESSED_KEYS_ADDR]
         return info
 
     def get_dungeon_info(self) -> dict:
         info = dict()
         entrance_keys = list()
-        for i, addr in enumerate(range(self.DUNGEON_ENTRANCE_KEYS_ADDRS[0], self.DUNGEON_ENTRANCE_KEYS_ADDRS[1] + 1)):
-            if self.pyboy.get_memory_value(addr) == 0x01:
+        for i, addr in enumerate(
+                range(self.DUNGEON_ENTRANCE_KEYS_ADDRS[0], self.DUNGEON_ENTRANCE_KEYS_ADDRS[1] + 1)):
+            if self.pyboy.memory[addr] == 0x01:
                 entrance_keys.append(i)
         info['dungeon_entrance_keys'] = entrance_keys
 
         dungeon_items = dict()
-        for i, addr in enumerate(range(self.DUNGEONS_ITEM_FLAGS_ADDRS[0], self.DUNGEONS_ITEM_FLAGS_ADDRS[1] + 1, 5)):
-            dungeon_items[f'dungeon{i}_keys'] = self.pyboy.get_memory_value(addr)
+        for i, addr in enumerate(
+                range(self.DUNGEONS_ITEM_FLAGS_ADDRS[0], self.DUNGEONS_ITEM_FLAGS_ADDRS[1] + 1, 5)):
+            dungeon_items[f'dungeon{i}_keys'] = self.pyboy.memory[addr]
         info['dungeon_items'] = dungeon_items
 
         dungeon_instrument = dict()
-        for i, addr in enumerate(range(self.INSTRUMENT_FOR_EVERY_DUNGEON_ADDRS[0], self.INSTRUMENT_FOR_EVERY_DUNGEON_ADDRS[1] + 1)):
-            dungeon_instrument[f'dungeon{i}_instrument'] = (self.pyboy.get_memory_value(addr) == 0x03)
+        for i, addr in enumerate(
+                range(self.INSTRUMENT_FOR_EVERY_DUNGEON_ADDRS[0], self.INSTRUMENT_FOR_EVERY_DUNGEON_ADDRS[1] + 1)):
+            dungeon_instrument[f'dungeon{i}_instrument'] = (self.pyboy.memory[addr] == 0x03)
         info['dungeon_instruments'] = dungeon_instrument
 
-        info['dungeon_pos_grid'] = self.pyboy.get_memory_value(self.POS_IN8X8_DUNGEON_GRID_ADDR)
+        info['dungeon_pos_grid'] = self.pyboy.memory[self.POS_IN8X8_DUNGEON_GRID_ADDR]
 
         return info
 
     def get_world_map_info(self) -> dict:
         info = dict()
         for i, addr in enumerate(range(self.WORLD_MAP_STATUS_ADDRS[0], self.WORLD_MAP_STATUS_ADDRS[1] + 1)):
-            value = self.pyboy.get_memory_value(addr)
+            value = self.pyboy.memory[addr]
             attributes = list()
             if value == 0x00:
                 attributes.append('U')
@@ -375,7 +384,7 @@ class ZeldaLinksAwakening(Env):
     def decode_string(self, starting_addr: int, final_addr: int) -> str:
         name = ''
         for addr in range(starting_addr, final_addr + 1):
-            bytes_value = self.pyboy.get_memory_value(addr).to_bytes(2, byteorder='big')
+            bytes_value = self.pyboy.memory[addr].to_bytes(2, byteorder='big')
             if bytes_value in self.TEXT_TABLE.keys():
                 char = self.TEXT_TABLE[bytes_value]
             else:
@@ -386,24 +395,24 @@ class ZeldaLinksAwakening(Env):
         return name
 
     def decode_hearts(self, addr: int) -> float:
-        return (self.pyboy.get_memory_value(addr) / 0x04) * 0.5
+        return (self.pyboy.memory[addr] / 0x04) * 0.5
 
     def decode_rupees(self) -> int:
         return int(
-            str(self.read_bcd(self.pyboy.get_memory_value(self.NUMBER_RUPEES_ADDRS[0]))) +
-            str(self.read_bcd(self.pyboy.get_memory_value(self.NUMBER_RUPEES_ADDRS[1])))
+            str(self.read_bcd(self.pyboy.memory[self.NUMBER_RUPEES_ADDRS[0]])) +
+            str(self.read_bcd(self.pyboy.memory[self.NUMBER_RUPEES_ADDRS[1]]))
         )
 
     def decode_inventory(self) -> list[str]:
         items = list()
         for addr in range(self.INVENTORY_ADDRS[0], self.INVENTORY_ADDRS[0] + 1):
-            value = self.pyboy.get_memory_value(addr)
+            value = self.pyboy.memory[addr]
             if value != 0x00:
                 items.append(self.ITEM_DICT[value])
         return items
 
     def decode_trading_game_item(self):
-        return 'yoshi' if self.pyboy.get_memory_value(self.CURRENT_ITEM_TRADING_GAME_ADDR) == 0x01 else 'magnifier'
+        return 'yoshi' if self.pyboy.memory[self.CURRENT_ITEM_TRADING_GAME_ADDR] == 0x01 else 'magnifier'
 
     def read_bcd(self, value) -> int:
         return 10 * ((value >> 4) & 0x0f) + (value & 0x0f)

@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat, Callable, List
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -114,16 +115,16 @@ class DonkeyKongLand3(Env):
     LEVEL_DATA_ADDRS = [0xA01C, 0xA03F]     # same of level bitflag
     BOSS_LEVEL_DATA_ADDRS = [0xA040, 0xA045]  # bit 6: if bonus coin is collected, bit 1: cleared
 
-    def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
+    def __init__(self, window_type: str = 'null', save_path: str | None = None, load_path: str | None = None,
                  max_actions: int | None = None, all_actions: bool = False,
-                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False,):
-        assert window_type == 'SDL2' or window_type == 'headless'
+                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False, rgba: bool = False,):
         super().__init__()
         self.prev_action_idx = None
         self.prev_distance = None
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
@@ -132,7 +133,7 @@ class DonkeyKongLand3(Env):
         with importlib.resources.path('gle.roms', "Donkey Kong Land III (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.save_path = save_path
@@ -140,7 +141,7 @@ class DonkeyKongLand3(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -174,10 +175,13 @@ class DonkeyKongLand3(Env):
                 [WindowEvent.RELEASE_ARROW_LEFT, WindowEvent.RELEASE_BUTTON_B],
             ]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
         self.original_distance = 0
         _, info = self.reset()
@@ -208,7 +212,7 @@ class DonkeyKongLand3(Env):
             done = done or self.subtask(info)
 
         if self.return_sound:
-            return obs, self.screen.sound, self.get_reward(info['x_pos']), done, False, info
+            return obs, self.pyboy.sound.ndarray, self.get_reward(info['x_pos']), done, False, info
         else:
             return obs, self.get_reward(info['x_pos']), done, False, info
 
@@ -229,7 +233,10 @@ class DonkeyKongLand3(Env):
         return self.render(), self.get_info()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -237,11 +244,11 @@ class DonkeyKongLand3(Env):
         with importlib.resources.path('gle.roms', "Donkey Kong Land III (U) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                FUNCTION FOR MOVING IN THE GAME
@@ -294,12 +301,10 @@ class DonkeyKongLand3(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
         else:  # different action
             # release previous actions
             old_actions_to_be_released = self.release_actions[self.prev_action_idx]
@@ -316,19 +321,16 @@ class DonkeyKongLand3(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
 
     def take_action2(self, action_idx: int):
         self.pyboy.send_input(self.actions[action_idx])
-        for i in range(15):
-            if i == 8:
-                self.pyboy.send_input(self.release_actions[action_idx])
-            self.pyboy.tick()
+        self.pyboy.tick(7)
+        self.pyboy.send_input(self.release_actions[action_idx])
+        self.pyboy.tick(8)
 
     def get_info(self) -> dict:
         return {**self.get_general_info(),
@@ -344,43 +346,44 @@ class DonkeyKongLand3(Env):
             reward = distance - self.prev_distance
             self.prev_distance = distance
             return reward
+
     #   ******************************************************
     #                FUNCTION FOR READING RAM
     #   ******************************************************
     def get_current_character(self) -> str:
         names = ['Kiddy Kong', 'Dixie Kong', 'Ellie', 'Squawks', 'Enguarde', 'Squitter', 'Rattly', 'Toboggan']
-        return names[self.pyboy.get_memory_value(self.CURRENT_CHARACTER_ADDR)]
+        return names[self.pyboy.memory[self.CURRENT_CHARACTER_ADDR]]
 
     def get_general_info(self) -> dict:
         info = dict()
         info['character'] = self.get_current_character()
-        info['x_pos'] = (self.pyboy.get_memory_value(self.KONG_X_POS[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.KONG_X_POS[1]))
-        info['y_pos'] = (self.pyboy.get_memory_value(self.KONG_Y_POS[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.KONG_Y_POS[1]))
-        info['invincibility_timer'] = self.pyboy.get_memory_value(self.INVINCIBILITY_TIMER_ADDR)
-        info['stage_type'] = self.pyboy.get_memory_value(self.CURRENT_STAGE_TYPE_ADDR)
-        info['bonus_timer'] = self.pyboy.get_memory_value(self.BONUS_TIMER_ADDR)
-        info['bonus_timer_counter'] = self.pyboy.get_memory_value(self.BONUS_STAGE_COUNTER_ADDR)
-        info['bonus_counter'] = self.pyboy.get_memory_value(self.BONUS_STAGE_COUNTER_ADDR)
+        info['x_pos'] = (self.pyboy.memory[self.KONG_X_POS[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.KONG_X_POS[1]])
+        info['y_pos'] = (self.pyboy.memory[self.KONG_Y_POS[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.KONG_Y_POS[1]])
+        info['invincibility_timer'] = self.pyboy.memory[self.INVINCIBILITY_TIMER_ADDR]
+        info['stage_type'] = self.pyboy.memory[self.CURRENT_STAGE_TYPE_ADDR]
+        info['bonus_timer'] = self.pyboy.memory[self.BONUS_TIMER_ADDR]
+        info['bonus_timer_counter'] = self.pyboy.memory[self.BONUS_STAGE_COUNTER_ADDR]
+        info['bonus_counter'] = self.pyboy.memory[self.BONUS_STAGE_COUNTER_ADDR]
         return info
 
     def get_hram_info(self) -> dict:
         info = dict()
-        info['level'] = self.pyboy.get_memory_value(self.CURRENT_LEVEL_ADDR)
-        info['lives'] = self.pyboy.get_memory_value(self.LIVES_ADDR)
-        info['bananas'] = self.pyboy.get_memory_value(self.BANANAS_ADDR)
-        info['current_kong'] = 'Diddy' if self.pyboy.get_memory_value(self.CURRENT_KONG_ADDR) == 0x00 else 'Dixie'
-        info['hits_remaining'] = self.pyboy.get_memory_value(self.NUMBER_HITS_REMAINING_ADDR)
-        info['world'] = self.pyboy.get_memory_value(self.CURRENT_WORLD_IN_WORLD_MAP_ADDR)
-        info['level_world_map'] = self.pyboy.get_memory_value(self.CURRENT_LEVEL_IN_WORLD_MAP_ADDR)
-        info['hours'] = self.pyboy.get_memory_value(self.HOURS_ADDR)
-        info['minutes'] = self.pyboy.get_memory_value(self.MINUTES_ADDR)
-        info['seconds'] = self.pyboy.get_memory_value(self.SECONDS_ADDR)
-        info['bear_coins'] = self.pyboy.get_memory_value(self.BEAR_COINS_ADDR)
-        info['dk_coins'] = self.pyboy.get_memory_value(self.DK_COINS_ADDR)
-        info['watches'] = self.pyboy.get_memory_value(self.WATCHES_ADDR)
-        info['boss_stage'] = self.pyboy.get_memory_value(self.BOSS_STAGE_FLAG) == 0x01
+        info['level'] = self.pyboy.memory[self.CURRENT_LEVEL_ADDR]
+        info['lives'] = self.pyboy.memory[self.LIVES_ADDR]
+        info['bananas'] = self.pyboy.memory[self.BANANAS_ADDR]
+        info['current_kong'] = 'Diddy' if self.pyboy.memory[self.CURRENT_KONG_ADDR] == 0x00 else 'Dixie'
+        info['hits_remaining'] = self.pyboy.memory[self.NUMBER_HITS_REMAINING_ADDR]
+        info['world'] = self.pyboy.memory[self.CURRENT_WORLD_IN_WORLD_MAP_ADDR]
+        info['level_world_map'] = self.pyboy.memory[self.CURRENT_LEVEL_IN_WORLD_MAP_ADDR]
+        info['hours'] = self.pyboy.memory[self.HOURS_ADDR]
+        info['minutes'] = self.pyboy.memory[self.MINUTES_ADDR]
+        info['seconds'] = self.pyboy.memory[self.SECONDS_ADDR]
+        info['bear_coins'] = self.pyboy.memory[self.BEAR_COINS_ADDR]
+        info['dk_coins'] = self.pyboy.memory[self.DK_COINS_ADDR]
+        info['watches'] = self.pyboy.memory[self.WATCHES_ADDR]
+        info['boss_stage'] = self.pyboy.memory[self.BOSS_STAGE_FLAG] == 0x01
         info['level_bitflags'] = self.decode_level_bitflag(self.CURRENT_LEVEL_BITFLAG_ADDR)
         return info
 
@@ -397,7 +400,7 @@ class DonkeyKongLand3(Env):
         boss_info = dict()
         for i, addr in enumerate(range(self.BOSS_LEVEL_DATA_ADDRS[0], self.BOSS_LEVEL_DATA_ADDRS[1] + 1)):
             tmp = dict()
-            value = self.pyboy.get_memory_value(addr)
+            value = self.pyboy.memory[addr]
             tmp['cleared'] = value & (1 << 0) != 0
             tmp['bonus_coin'] = value & (1 << 6) != 0
             boss_info[f'boss{i}'] = tmp
@@ -411,7 +414,7 @@ class DonkeyKongLand3(Env):
 
     def decode_level_bitflag(self, addr) -> dict:
         tmp = dict()
-        value = self.pyboy.get_memory_value(addr)
+        value = self.pyboy.memory[addr]
         tmp['cleared'] = value & (1 << 0) != 0
         tmp['both_coins'] = value & (1 << 1) != 0
         tmp['bonus_coin1'] = value & (1 << 3) != 0

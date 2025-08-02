@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -41,20 +42,20 @@ class CastlevaniaTheAdventure(Env):
     ENEMY_Y_POS_ADDR = 0xC612
     ENEMY_RESPAWN_ADDR = 0xC60C # 0 = yes / 1 = no
 
-    def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
-                 max_actions: int | None = None, all_actions: bool = False, return_sound: bool = False,):
-        assert window_type == 'SDL2' or window_type == 'headless'
+    def __init__(self, window_type: str = 'null', save_path: str | None = None, load_path: str | None = None,
+                 max_actions: int | None = None, all_actions: bool = False, return_sound: bool = False, rgba: bool = False,):
         super().__init__()
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Castlevania Adventure, The (E) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.save_path = save_path
@@ -62,7 +63,7 @@ class CastlevaniaTheAdventure(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -99,7 +100,7 @@ class CastlevaniaTheAdventure(Env):
         self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
         self.prev_action_idx = None
         self.prev_score = 0
@@ -122,7 +123,7 @@ class CastlevaniaTheAdventure(Env):
         reward = info['score'] - self.prev_score
         self.prev_score = info['score']
         if self.return_sound:
-            return obs, self.screen.sound, reward, done, False, info
+            return obs, self.pyboy.sound.ndarray, reward, done, False, info
         else:
             return obs, reward, done, False, info
 
@@ -151,11 +152,11 @@ class CastlevaniaTheAdventure(Env):
         with importlib.resources.path('gle.roms', "Castlevania Adventure, The (E) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                FUNCTION FOR MOVING IN THE GAME
@@ -170,11 +171,9 @@ class CastlevaniaTheAdventure(Env):
             for _ in range(4):
                 self.take_action2(6)
             self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-            for _ in range(120):
-                self.pyboy.tick()
+            self.pyboy.tick(120)
             self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
-            for _ in range(5):
-                self.pyboy.tick()
+            self.pyboy.tick(5)
             for _ in range(18):
                 self.take_action2(6)
             break
@@ -200,13 +199,11 @@ class CastlevaniaTheAdventure(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
-        else: # different action
+                self.pyboy.tick(10)
+        else:  # different action
             # release previous actions
             old_actions_to_be_released = self.release_actions[self.prev_action_idx]
             if isinstance(old_actions_to_be_released, list):
@@ -222,19 +219,16 @@ class CastlevaniaTheAdventure(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
 
     def take_action2(self, action_idx: int):
         self.pyboy.send_input(self.actions[action_idx])
-        for i in range(15):
-            if i == 8:
-                self.pyboy.send_input(self.release_actions[action_idx])
-            self.pyboy.tick()
+        self.pyboy.tick(7)
+        self.pyboy.send_input(self.release_actions[action_idx])
+        self.pyboy.tick(8)
 
     def get_info(self) -> dict:
         return {**self.get_general_info(),
@@ -247,44 +241,44 @@ class CastlevaniaTheAdventure(Env):
     #   ******************************************************
     def get_general_info(self) -> dict:
         info = dict()
-        info['stage'] = self.pyboy.get_memory_value(self.CURRENT_STAGE_ADDR)
+        info['stage'] = self.pyboy.memory[self.CURRENT_STAGE_ADDR]
         info['hi_score'] = self.decode_score(self.HI_SCORE_ADDRS)
         info['score'] = self.decode_score(self.CURRENT_SCORE_ADDR)
-        info['lives'] = self.pyboy.get_memory_value(self.CURRENT_LIVES_ADDR)
-        info['sublevel_x_pos_metatiles'] = self.pyboy.get_memory_value(self.CURRENT_SUBLEVEL_X_POSITION_METATILES_ADDR)
-        info['sublevel'] = self.pyboy.get_memory_value(self.CURRENT_SUBLEVEL_ADDR)
-        info['level_timer_minutes'] = self.read_bcd(self.pyboy.get_memory_value(self.LEVEL_TIMER_MINUTES_ADDR))
-        info['level_timer_seconds'] = self.read_bcd(self.pyboy.get_memory_value(self.LEVEL_TIMER_SECONDS_ADDR))
+        info['lives'] = self.pyboy.memory[self.CURRENT_LIVES_ADDR]
+        info['sublevel_x_pos_metatiles'] = self.pyboy.memory[self.CURRENT_SUBLEVEL_X_POSITION_METATILES_ADDR]
+        info['sublevel'] = self.pyboy.memory[self.CURRENT_SUBLEVEL_ADDR]
+        info['level_timer_minutes'] = self.read_bcd(self.pyboy.memory[self.LEVEL_TIMER_MINUTES_ADDR])
+        info['level_timer_seconds'] = self.read_bcd(self.pyboy.memory[self.LEVEL_TIMER_SECONDS_ADDR])
         return info
 
     def get_christopher_info(self) -> dict:
         info = dict()
-        info['hp'] = self.pyboy.get_memory_value(self.CHRISTOPHER_CURRENT_HP)
+        info['hp'] = self.pyboy.memory[self.CHRISTOPHER_CURRENT_HP]
         info['action_state'] = self.decode_action_state()
-        info['whipping_timer'] = self.pyboy.get_memory_value(self.CHRISTOPHER_TIMER_WHIPPING_ADDR)
-        info['x_pos'] = [self.pyboy.get_memory_value(addr) for addr in
+        info['whipping_timer'] = self.pyboy.memory[self.CHRISTOPHER_TIMER_WHIPPING_ADDR]
+        info['x_pos'] = [self.pyboy.memory[addr] for addr in
                          range(self.CHRISTOPHER_X_POS_ADDRS[0], self.CHRISTOPHER_X_POS_ADDRS[1] + 1)]
         info['jump_state'] = self.decode_jump_state()
-        info['y_gravity'] = self.pyboy.get_memory_value(self.CHRISTOPHER_GRAVITY_Y_ADDR)
-        info['y_velocity_pixel'] = self.pyboy.get_memory_value(self.CHRISTOPHER_Y_VELOCITY[0])
-        info['y_velocity_subpixel'] = self.pyboy.get_memory_value(self.CHRISTOPHER_Y_VELOCITY[1])
-        info['y_pos_camera_pixel'] = self.pyboy.get_memory_value(self.CHRISTOPHER_Y_POS_CAMERA_ADDRS[0])
-        info['y_pos_camera_subpixel'] = self.pyboy.get_memory_value(self.CHRISTOPHER_Y_POS_CAMERA_ADDRS[1])
-        info['x_pos_camera'] = self.pyboy.get_memory_value(self.CHRISTOPHER_X_POS_CAMERA_ADDR)
+        info['y_gravity'] = self.pyboy.memory[self.CHRISTOPHER_GRAVITY_Y_ADDR]
+        info['y_velocity_pixel'] = self.pyboy.memory[self.CHRISTOPHER_Y_VELOCITY[0]]
+        info['y_velocity_subpixel'] = self.pyboy.memory[self.CHRISTOPHER_Y_VELOCITY[1]]
+        info['y_pos_camera_pixel'] = self.pyboy.memory[self.CHRISTOPHER_Y_POS_CAMERA_ADDRS[0]]
+        info['y_pos_camera_subpixel'] = self.pyboy.memory[self.CHRISTOPHER_Y_POS_CAMERA_ADDRS[1]]
+        info['x_pos_camera'] = self.pyboy.memory[self.CHRISTOPHER_X_POS_CAMERA_ADDR]
         info['pose'] = self.decode_pose()
-        info['facing'] = 'right' if self.pyboy.get_memory_value(self.FACING_ADDR) == 0x20 else 'left'
+        info['facing'] = 'right' if self.pyboy.memory[self.FACING_ADDR] == 0x20 else 'left'
         info['whip_atk_type'] = self.decode_whip_atk()
         info['whip_status'] = self.decode_whip_status()
         return {'christopher': info}
 
     def get_enemy_info(self) -> dict:
         info = dict()
-        info['slot_taken'] = self.pyboy.get_memory_value(self.ENEMY_SLOT_TAKEN_ADDR) == 0x80
-        info['id'] = self.pyboy.get_memory_value(self.ENEMY_ID_ADDR)
+        info['slot_taken'] = self.pyboy.memory[self.ENEMY_SLOT_TAKEN_ADDR] == 0x80
+        info['id'] = self.pyboy.memory[self.ENEMY_ID_ADDR]
         info['status'] = self.decode_enemy_status()
-        info['x_pos'] = self.pyboy.get_memory_value(self.ENEMY_X_POS_ADDR)
-        info['y_pos'] = self.pyboy.get_memory_value(self.ENEMY_Y_POS_ADDR)
-        info['respawn'] = self.pyboy.get_memory_value(self.ENEMY_RESPAWN_ADDR) == 0x00
+        info['x_pos'] = self.pyboy.memory[self.ENEMY_X_POS_ADDR]
+        info['y_pos'] = self.pyboy.memory[self.ENEMY_Y_POS_ADDR]
+        info['respawn'] = self.pyboy.memory[self.ENEMY_RESPAWN_ADDR] == 0x00
         return {'enemy': info}
 
     #   ******************************************************
@@ -296,15 +290,15 @@ class CastlevaniaTheAdventure(Env):
     def decode_score(self, addr_list) -> int:
         score = 0
         for i, addr in enumerate(range(addr_list[0], addr_list[1] + 1)):
-            score += (100 ** i) * self.read_bcd(self.pyboy.get_memory_value(addr))
+            score += (100 ** i) * self.read_bcd(self.pyboy.memory[addr])
         return score
 
     def decode_action_state(self) -> str:
         action_states = ['jumping', 'crouching', 'rope', 'whipping', 'UNK', 'UNK', 'UNK', 'UNK']
-        return action_states[self.pyboy.get_memory_value(self.CHRISTOPHER_ACTION_STATE_ADDR)]
+        return action_states[self.pyboy.memory[self.CHRISTOPHER_ACTION_STATE_ADDR]]
 
     def decode_jump_state(self) -> str:
-        jump = self.pyboy.get_memory_value(self.CHRISTOPHER_JUMP_STATE_ADDR)
+        jump = self.pyboy.memory[self.CHRISTOPHER_JUMP_STATE_ADDR]
         if jump == 0x00:
             return 'grounded'
         elif jump == 0x01:
@@ -317,7 +311,7 @@ class CastlevaniaTheAdventure(Env):
             return 'UNK'
 
     def decode_pose(self) -> str:
-        pose = self.pyboy.get_memory_value(self.CHRISTOPHER_POSE_ADDR)
+        pose = self.pyboy.memory[self.CHRISTOPHER_POSE_ADDR]
         if pose == 0x01:
             return 'standing/walking'
         elif pose == 0x02:
@@ -334,7 +328,7 @@ class CastlevaniaTheAdventure(Env):
             return 'UNK'
 
     def decode_whip_atk(self):
-        value = self.pyboy.get_memory_value(self.CHRISTOPHER_CURRENT_WHIP_ATTACK_TYPE_ADDR)
+        value = self.pyboy.memory[self.CHRISTOPHER_CURRENT_WHIP_ATTACK_TYPE_ADDR]
         if value == 0x00:
             return 'grounded'
         elif value == 0x01:
@@ -345,7 +339,7 @@ class CastlevaniaTheAdventure(Env):
             return 'UNK'
 
     def decode_whip_status(self):
-        value = self.pyboy.get_memory_value(self.CHRISTOPHER_WHIP_STATUS_ADDR)
+        value = self.pyboy.memory[self.CHRISTOPHER_WHIP_STATUS_ADDR]
         if value == 0x00:
             return 'regular'
         elif value == 0x01:
@@ -356,7 +350,7 @@ class CastlevaniaTheAdventure(Env):
             return 'UNK'
 
     def decode_enemy_status(self):
-        value = self.pyboy.get_memory_value(self.CHRISTOPHER_WHIP_STATUS_ADDR)
+        value = self.pyboy.memory[self.CHRISTOPHER_WHIP_STATUS_ADDR]
         if value == 0x00:
             return 'regular'
         elif value == 0x01:

@@ -2,9 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name='GameBoyLearningEnvironment',
-    version='0.2.0',  # Initial release version
+    version='1.0.0',
     author='Edoardo Fazzari',
-    author_email='edoardo.fazzari@gmail.com',
+    author_email='fazzari.edoardo@gmail.com',
     description='A short description of the package',
     long_description=open('README.md').read(),  # Detailed description, usually from README.md
     long_description_content_type='text/markdown',
@@ -13,7 +13,7 @@ setup(
     install_requires=[
         'gymnasium',
         'numpy==1.26.4',
-        'pyboy==1.6.14',
+        'pyboy==2.6.0',
         'pygame==2.5.2',
         'pillow==10.3.0',
         'opencv-python==4.10.0.82'

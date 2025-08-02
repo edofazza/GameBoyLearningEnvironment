@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 
 ALL_ACTIONS = [
