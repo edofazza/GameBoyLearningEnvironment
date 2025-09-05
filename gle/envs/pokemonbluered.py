@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat, Callable, List
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -602,14 +603,14 @@ class PokemonBlueRed(Env):
 
     def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
                  start_button: bool = False, max_actions: int | None = None, all_actions: bool = False,
-                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False,
+                 subtask: Callable | List[Callable] | None = None, return_sound: bool = False, rgba: bool = False
                  ):
-        assert window_type == 'SDL2' or window_type == 'headless'
         super().__init__()
         # episode truncation
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
@@ -620,7 +621,7 @@ class PokemonBlueRed(Env):
         with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.save_path = save_path
@@ -628,7 +629,7 @@ class PokemonBlueRed(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
         assert self.pyboy.cartridge_title() == 'POKEMON RED' or self.pyboy.cartridge_title() == 'POKEMON BLUE', 'The cartridge title should be POKEMON BLUE or POKEMON RED, international edition not Japan edition (RAM addresses are different in the latter)!'
 
         if all_actions:
@@ -659,10 +660,13 @@ class PokemonBlueRed(Env):
             self.actions += [WindowEvent.PRESS_BUTTON_START]
             self.release_actions += [WindowEvent.RELEASE_BUTTON_START]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
         _, info = self.reset()
 
     #   ******************************************************
@@ -705,7 +709,7 @@ class PokemonBlueRed(Env):
             reward = 0
 
         if self.return_sound:
-            return obs, self.screen.sound, reward, done, False, info
+            return obs, self.pyboy.sound.ndarray, reward, done, False, info
         else:
             return obs, reward, done, False, info
 
@@ -727,7 +731,10 @@ class PokemonBlueRed(Env):
         return self.render(), info
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -735,26 +742,32 @@ class PokemonBlueRed(Env):
         with importlib.resources.path('gle.roms', "Pokemon Red (UE) [S][!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                FUNCTION FOR MOVING IN THE GAME
     #   ******************************************************
     def skip_game_initial_video(self):
-        while not self.pyboy.tick():
-            if self.pyboy.frame_count == 300 or self.pyboy.frame_count == 700 or self.pyboy.frame_count == 900:
-                self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-            if self.pyboy.frame_count == 305 or self.pyboy.frame_count == 705 or self.pyboy.frame_count == 905:
-                self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
-            if self.pyboy.frame_count == 1100:
-                self.pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
-            if self.pyboy.frame_count == 1105:
-                self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_A)
-                break
+        self.pyboy.tick(300)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(395)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(195)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(200)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
+        self.pyboy.tick(5)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_A)
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -772,10 +785,9 @@ class PokemonBlueRed(Env):
     #   ******************************************************
     def take_action(self, action_idx: int):
         self.pyboy.send_input(self.actions[action_idx])
-        for i in range(24):
-            if i == 8:
-                self.pyboy.send_input(self.release_actions[action_idx])
-            self.pyboy.tick()
+        self.pyboy.tick(7)
+        self.pyboy.send_input(self.release_actions[action_idx])
+        self.pyboy.tick(18)
 
     def get_info(self) -> dict:
         return {**self.get_player_info(),
@@ -796,580 +808,580 @@ class PokemonBlueRed(Env):
         player_info['name'] = self.decode_name(self.PLAYER_NAME_ADDRS[0], self.PLAYER_NAME_ADDRS[1])
         player_info['money'] = self.read_money()
         player_info['rival_name'] = self.decode_name(self.RIVAL_NAME_ADDRS[0], self.RIVAL_NAME_ADDRS[1])
-        player_info['x_pos'] = self.pyboy.get_memory_value(self.CURRENT_X_POS_ADDR)
-        player_info['y_pos'] = self.pyboy.get_memory_value(self.CURRENT_Y_POS_ADDR)
-        player_info['location_id'] = self.pyboy.get_memory_value(self.CURRENT_MAP_NUMBER_ADDR)
+        player_info['x_pos'] = self.pyboy.memory[self.CURRENT_X_POS_ADDR]
+        player_info['y_pos'] = self.pyboy.memory[self.CURRENT_Y_POS_ADDR]
+        player_info['location_id'] = self.pyboy.memory[self.CURRENT_MAP_NUMBER_ADDR]
         player_info['badges'] = self.decode_badges()
-        player_info['on_bike'] = self.pyboy.get_memory_value(self.ON_BIKE_ADDR) == 0x01
+        player_info['on_bike'] = self.pyboy.memory[self.ON_BIKE_ADDR] == 0x01
 
-        player_info['pokemon_in_party'] = self.pyboy.get_memory_value(self.N_POKEMON_IN_PARTY_ADDR)
+        player_info['pokemon_in_party'] = self.pyboy.memory[self.N_POKEMON_IN_PARTY_ADDR]
 
         # Pokemon 1 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.PARTY_POKEMON1_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.PARTY_POKEMON1_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.PARTY_POKEMON1_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.PARTY_POKEMON1_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.PARTY_POKEMON1_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.PARTY_POKEMON1_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON1_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON1_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON1_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_ATTACK_DEFENSE_IV_ADDR) >> 4) & 0b1111
-        pokemon['def_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_ATTACK_DEFENSE_IV_ADDR) & 0b1111
-        pokemon['speed_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR) >> 4) & 0b1111
-        pokemon['special_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR) & 0b1111
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON1_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON1_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON1_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.PARTY_POKEMON1_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.PARTY_POKEMON1_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.PARTY_POKEMON1_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.PARTY_POKEMON1_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.PARTY_POKEMON1_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.PARTY_POKEMON1_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.PARTY_POKEMON1_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.PARTY_POKEMON1_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.PARTY_POKEMON1_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON1_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.PARTY_POKEMON1_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON1_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.PARTY_POKEMON1_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON1_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.PARTY_POKEMON1_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.PARTY_POKEMON1_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.PARTY_POKEMON1_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.PARTY_POKEMON1_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_iv'] = (self.pyboy.memory[self.PARTY_POKEMON1_ATTACK_DEFENSE_IV_ADDR] >> 4) & 0b1111
+        pokemon['def_iv'] = self.pyboy.memory[self.PARTY_POKEMON1_ATTACK_DEFENSE_IV_ADDR] & 0b1111
+        pokemon['speed_iv'] = (self.pyboy.memory[self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR] >> 4) & 0b1111
+        pokemon['special_iv'] = self.pyboy.memory[self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR] & 0b1111
+        pokemon['pp1'] = self.pyboy.memory[self.PARTY_POKEMON1_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.PARTY_POKEMON1_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.PARTY_POKEMON1_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.PARTY_POKEMON1_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.PARTY_POKEMON1_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.PARTY_POKEMON1_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON1_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.PARTY_POKEMON1_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON1_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.PARTY_POKEMON1_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON1_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.PARTY_POKEMON1_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON1_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.PARTY_POKEMON1_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON1_SPECIAL_ADDR[1]])
         player_info['pokemon_1'] = pokemon.copy()
         # Pokemon 2 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_HP_ADDR[0]) + (2 ** 8)
-                         + self.pyboy.get_memory_value(self.PARTY_POKEMON2_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.PARTY_POKEMON2_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.PARTY_POKEMON2_HP_ADDR[0]] + (2 ** 8)
+                         + self.pyboy.memory[self.PARTY_POKEMON2_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.PARTY_POKEMON2_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.PARTY_POKEMON2_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON2_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON2_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON2_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_ATTACK_DEFENSE_IV_ADDR) >> 4) & 0b1111
-        pokemon['def_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_ATTACK_DEFENSE_IV_ADDR) & 0b1111
-        pokemon['speed_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR) >> 4) & 0b1111
-        pokemon['special_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR) & 0b1111
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.PARTY_POKEMON2_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON2_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON2_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON2_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON2_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.PARTY_POKEMON2_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.PARTY_POKEMON2_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.PARTY_POKEMON2_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.PARTY_POKEMON2_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.PARTY_POKEMON2_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.PARTY_POKEMON2_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.PARTY_POKEMON2_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.PARTY_POKEMON2_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.PARTY_POKEMON2_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON2_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.PARTY_POKEMON2_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON2_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.PARTY_POKEMON2_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON2_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.PARTY_POKEMON2_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.PARTY_POKEMON2_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.PARTY_POKEMON2_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.PARTY_POKEMON2_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_iv'] = (self.pyboy.memory[self.PARTY_POKEMON2_ATTACK_DEFENSE_IV_ADDR] >> 4) & 0b1111
+        pokemon['def_iv'] = self.pyboy.memory[self.PARTY_POKEMON2_ATTACK_DEFENSE_IV_ADDR] & 0b1111
+        pokemon['speed_iv'] = (self.pyboy.memory[self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR] >> 4) & 0b1111
+        pokemon['special_iv'] = self.pyboy.memory[self.PARTY_POKEMON1_SPEED_SPECIAL_IV_ADDR] & 0b1111
+        pokemon['pp1'] = self.pyboy.memory[self.PARTY_POKEMON2_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.PARTY_POKEMON2_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.PARTY_POKEMON2_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.PARTY_POKEMON2_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.PARTY_POKEMON2_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.PARTY_POKEMON2_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON2_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.PARTY_POKEMON2_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON2_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.PARTY_POKEMON2_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON2_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.PARTY_POKEMON2_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON2_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.PARTY_POKEMON2_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON2_SPECIAL_ADDR[1]])
         player_info['pokemon_2'] = pokemon.copy()
         # Pokemon 3 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.PARTY_POKEMON3_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.PARTY_POKEMON3_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.PARTY_POKEMON3_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.PARTY_POKEMON3_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.PARTY_POKEMON3_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.PARTY_POKEMON3_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON3_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON3_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON3_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_ATTACK_DEFENSE_IV_ADDR) >> 4) & 0b1111
-        pokemon['def_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_ATTACK_DEFENSE_IV_ADDR) & 0b1111
-        pokemon['speed_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPEED_SPECIAL_IV_ADDR) >> 4) & 0b1111
-        pokemon['special_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPEED_SPECIAL_IV_ADDR) & 0b1111
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.PARTY_POKEMON3_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON3_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON3_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON3_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON3_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.PARTY_POKEMON3_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.PARTY_POKEMON3_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.PARTY_POKEMON3_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.PARTY_POKEMON3_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.PARTY_POKEMON3_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.PARTY_POKEMON3_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.PARTY_POKEMON3_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.PARTY_POKEMON3_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.PARTY_POKEMON3_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON3_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.PARTY_POKEMON3_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON3_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.PARTY_POKEMON3_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON3_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.PARTY_POKEMON3_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.PARTY_POKEMON3_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.PARTY_POKEMON3_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.PARTY_POKEMON3_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_iv'] = (self.pyboy.memory[self.PARTY_POKEMON3_ATTACK_DEFENSE_IV_ADDR] >> 4) & 0b1111
+        pokemon['def_iv'] = self.pyboy.memory[self.PARTY_POKEMON3_ATTACK_DEFENSE_IV_ADDR] & 0b1111
+        pokemon['speed_iv'] = (self.pyboy.memory[self.PARTY_POKEMON3_SPEED_SPECIAL_IV_ADDR] >> 4) & 0b1111
+        pokemon['special_iv'] = self.pyboy.memory[self.PARTY_POKEMON3_SPEED_SPECIAL_IV_ADDR] & 0b1111
+        pokemon['pp1'] = self.pyboy.memory[self.PARTY_POKEMON3_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.PARTY_POKEMON3_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.PARTY_POKEMON3_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.PARTY_POKEMON3_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.PARTY_POKEMON3_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.PARTY_POKEMON3_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON3_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.PARTY_POKEMON3_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON3_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.PARTY_POKEMON3_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON3_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.PARTY_POKEMON3_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON3_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.PARTY_POKEMON3_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON3_SPECIAL_ADDR[1]])
         player_info['pokemon_3'] = pokemon.copy()
         # Pokemon 4 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.PARTY_POKEMON4_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.PARTY_POKEMON4_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.PARTY_POKEMON4_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.PARTY_POKEMON4_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.PARTY_POKEMON4_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.PARTY_POKEMON4_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON4_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON4_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON4_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_ATTACK_DEFENSE_IV_ADDR) >> 4) & 0b1111
-        pokemon['def_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_ATTACK_DEFENSE_IV_ADDR) & 0b1111
-        pokemon['speed_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPEED_SPECIAL_IV_ADDR) >> 4) & 0b1111
-        pokemon['special_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPEED_SPECIAL_IV_ADDR) & 0b1111
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.PARTY_POKEMON4_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON4_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON4_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON4_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON4_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.PARTY_POKEMON4_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.PARTY_POKEMON4_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.PARTY_POKEMON4_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.PARTY_POKEMON4_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.PARTY_POKEMON4_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.PARTY_POKEMON4_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.PARTY_POKEMON4_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.PARTY_POKEMON4_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.PARTY_POKEMON4_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON4_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.PARTY_POKEMON4_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON4_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.PARTY_POKEMON4_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON4_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.PARTY_POKEMON4_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.PARTY_POKEMON4_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.PARTY_POKEMON4_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.PARTY_POKEMON4_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_iv'] = (self.pyboy.memory[self.PARTY_POKEMON4_ATTACK_DEFENSE_IV_ADDR] >> 4) & 0b1111
+        pokemon['def_iv'] = self.pyboy.memory[self.PARTY_POKEMON4_ATTACK_DEFENSE_IV_ADDR] & 0b1111
+        pokemon['speed_iv'] = (self.pyboy.memory[self.PARTY_POKEMON4_SPEED_SPECIAL_IV_ADDR] >> 4) & 0b1111
+        pokemon['special_iv'] = self.pyboy.memory[self.PARTY_POKEMON4_SPEED_SPECIAL_IV_ADDR] & 0b1111
+        pokemon['pp1'] = self.pyboy.memory[self.PARTY_POKEMON4_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.PARTY_POKEMON4_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.PARTY_POKEMON4_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.PARTY_POKEMON4_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.PARTY_POKEMON4_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.PARTY_POKEMON4_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON4_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.PARTY_POKEMON4_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON4_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.PARTY_POKEMON4_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON4_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.PARTY_POKEMON4_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON4_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.PARTY_POKEMON4_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON4_SPECIAL_ADDR[1]])
         player_info['pokemon_4'] = pokemon.copy()
         # Pokemon 5 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.PARTY_POKEMON5_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.PARTY_POKEMON5_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.PARTY_POKEMON5_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.PARTY_POKEMON5_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.PARTY_POKEMON5_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.PARTY_POKEMON5_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON5_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON5_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON5_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_ATTACK_DEFENSE_IV_ADDR) >> 4) & 0b1111
-        pokemon['def_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_ATTACK_DEFENSE_IV_ADDR) & 0b1111
-        pokemon['speed_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPEED_SPECIAL_IV_ADDR) >> 4) & 0b1111
-        pokemon['special_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPEED_SPECIAL_IV_ADDR) & 0b1111
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.PARTY_POKEMON5_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON5_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON5_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON5_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON5_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.PARTY_POKEMON5_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.PARTY_POKEMON5_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.PARTY_POKEMON5_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.PARTY_POKEMON5_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.PARTY_POKEMON5_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.PARTY_POKEMON5_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.PARTY_POKEMON5_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.PARTY_POKEMON5_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.PARTY_POKEMON5_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON5_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.PARTY_POKEMON5_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON5_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.PARTY_POKEMON5_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON5_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.PARTY_POKEMON5_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.PARTY_POKEMON5_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.PARTY_POKEMON5_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.PARTY_POKEMON5_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_iv'] = (self.pyboy.memory[self.PARTY_POKEMON5_ATTACK_DEFENSE_IV_ADDR] >> 4) & 0b1111
+        pokemon['def_iv'] = self.pyboy.memory[self.PARTY_POKEMON5_ATTACK_DEFENSE_IV_ADDR] & 0b1111
+        pokemon['speed_iv'] = (self.pyboy.memory[self.PARTY_POKEMON5_SPEED_SPECIAL_IV_ADDR] >> 4) & 0b1111
+        pokemon['special_iv'] = self.pyboy.memory[self.PARTY_POKEMON5_SPEED_SPECIAL_IV_ADDR] & 0b1111
+        pokemon['pp1'] = self.pyboy.memory[self.PARTY_POKEMON5_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.PARTY_POKEMON5_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.PARTY_POKEMON5_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.PARTY_POKEMON5_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.PARTY_POKEMON5_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.PARTY_POKEMON5_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON5_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.PARTY_POKEMON5_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON5_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.PARTY_POKEMON5_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON5_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.PARTY_POKEMON5_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON5_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.PARTY_POKEMON5_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON5_SPECIAL_ADDR[1]])
         player_info['pokemon_5'] = pokemon.copy()
         # Pokemon 6 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.PARTY_POKEMON6_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.PARTY_POKEMON6_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.PARTY_POKEMON6_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.PARTY_POKEMON6_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.PARTY_POKEMON6_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.PARTY_POKEMON6_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON6_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON6_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON6_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_ATTACK_DEFENSE_IV_ADDR) >> 4) & 0b1111
-        pokemon['def_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_ATTACK_DEFENSE_IV_ADDR) & 0b1111
-        pokemon['speed_iv'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPEED_SPECIAL_IV_ADDR) >> 4) & 0b1111
-        pokemon['special_iv'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPEED_SPECIAL_IV_ADDR) & 0b1111
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.PARTY_POKEMON6_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON6_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.PARTY_POKEMON6_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON6_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.PARTY_POKEMON6_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.PARTY_POKEMON6_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.PARTY_POKEMON6_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.PARTY_POKEMON6_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.PARTY_POKEMON6_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.PARTY_POKEMON6_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.PARTY_POKEMON6_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.PARTY_POKEMON6_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.PARTY_POKEMON6_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.PARTY_POKEMON6_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON6_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.PARTY_POKEMON6_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON6_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.PARTY_POKEMON6_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON6_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.PARTY_POKEMON6_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.PARTY_POKEMON6_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.PARTY_POKEMON6_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.PARTY_POKEMON6_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_iv'] = (self.pyboy.memory[self.PARTY_POKEMON6_ATTACK_DEFENSE_IV_ADDR] >> 4) & 0b1111
+        pokemon['def_iv'] = self.pyboy.memory[self.PARTY_POKEMON6_ATTACK_DEFENSE_IV_ADDR] & 0b1111
+        pokemon['speed_iv'] = (self.pyboy.memory[self.PARTY_POKEMON6_SPEED_SPECIAL_IV_ADDR] >> 4) & 0b1111
+        pokemon['special_iv'] = self.pyboy.memory[self.PARTY_POKEMON6_SPEED_SPECIAL_IV_ADDR] & 0b1111
+        pokemon['pp1'] = self.pyboy.memory[self.PARTY_POKEMON6_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.PARTY_POKEMON6_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.PARTY_POKEMON6_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.PARTY_POKEMON6_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.PARTY_POKEMON6_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.PARTY_POKEMON6_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON6_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.PARTY_POKEMON6_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.PARTY_POKEMON6_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.PARTY_POKEMON6_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON6_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.PARTY_POKEMON6_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.PARTY_POKEMON6_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.PARTY_POKEMON6_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.PARTY_POKEMON6_SPECIAL_ADDR[1]])
         player_info['pokemon_6'] = pokemon.copy()
         return {'player': player_info}
 
     def read_money(self) -> int:
-        return (100 * 100 * self.read_bcd(self.pyboy.get_memory_value(self.MONEY_ADDRS[0])) +
-                100 * self.read_bcd(self.pyboy.get_memory_value(self.MONEY_ADDRS[1])) +
-                self.read_bcd(self.pyboy.get_memory_value(self.MONEY_ADDRS[2])))
+        return (100 * 100 * self.read_bcd(self.pyboy.memory[self.MONEY_ADDRS[0]]) +
+                100 * self.read_bcd(self.pyboy.memory[self.MONEY_ADDRS[1]]) +
+                self.read_bcd(self.pyboy.memory[self.MONEY_ADDRS[2]]))
 
     def get_opponent_info(self) -> dict:
         opponent_info = dict()
 
-        opponent_info['pokemon_in_party'] = self.pyboy.get_memory_value(self.N_POKEMON_IN_PARTY_ADDR)
+        opponent_info['pokemon_in_party'] = self.pyboy.memory[self.N_POKEMON_IN_PARTY_ADDR]
 
         # Pokemon 1 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.OPPONENT_POKEMON1_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.OPPONENT_POKEMON1_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.OPPONENT_POKEMON1_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] =(self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPEED_EV_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_def_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_ATTACK_DEFENSE_IV_ADDR)
-        pokemon['speed_special_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPEED_SPECIAL_IV_ADDR)
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON1_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.OPPONENT_POKEMON1_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.OPPONENT_POKEMON1_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.OPPONENT_POKEMON1_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.OPPONENT_POKEMON1_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.OPPONENT_POKEMON1_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.OPPONENT_POKEMON1_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.OPPONENT_POKEMON1_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON1_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON1_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON1_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.OPPONENT_POKEMON1_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.OPPONENT_POKEMON1_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_def_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON1_ATTACK_DEFENSE_IV_ADDR]
+        pokemon['speed_special_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON1_SPEED_SPECIAL_IV_ADDR]
+        pokemon['pp1'] = self.pyboy.memory[self.OPPONENT_POKEMON1_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.OPPONENT_POKEMON1_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.OPPONENT_POKEMON1_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.OPPONENT_POKEMON1_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.OPPONENT_POKEMON1_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON1_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON1_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON1_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON1_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.OPPONENT_POKEMON1_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON1_SPECIAL_ADDR[1]])
         opponent_info['pokemon_1'] = pokemon.copy()
         # Pokemon 2 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.OPPONENT_POKEMON2_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.OPPONENT_POKEMON2_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.OPPONENT_POKEMON2_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_def_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_ATTACK_DEFENSE_IV_ADDR)
-        pokemon['speed_special_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPEED_SPECIAL_IV_ADDR)
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON2_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.OPPONENT_POKEMON2_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.OPPONENT_POKEMON2_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.OPPONENT_POKEMON2_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.OPPONENT_POKEMON2_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.OPPONENT_POKEMON2_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.OPPONENT_POKEMON2_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.OPPONENT_POKEMON2_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON2_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON2_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON2_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.OPPONENT_POKEMON2_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.OPPONENT_POKEMON2_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_def_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON2_ATTACK_DEFENSE_IV_ADDR]
+        pokemon['speed_special_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON2_SPEED_SPECIAL_IV_ADDR]
+        pokemon['pp1'] = self.pyboy.memory[self.OPPONENT_POKEMON2_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.OPPONENT_POKEMON2_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.OPPONENT_POKEMON2_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.OPPONENT_POKEMON2_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.OPPONENT_POKEMON2_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON2_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON2_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON2_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON2_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.OPPONENT_POKEMON2_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON2_SPECIAL_ADDR[1]])
         opponent_info['pokemon_2'] = pokemon.copy()
         # Pokemon 3 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.OPPONENT_POKEMON3_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.OPPONENT_POKEMON3_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.OPPONENT_POKEMON3_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_def_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_ATTACK_DEFENSE_IV_ADDR)
-        pokemon['speed_special_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPEED_SPECIAL_IV_ADDR)
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON3_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.OPPONENT_POKEMON3_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.OPPONENT_POKEMON3_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.OPPONENT_POKEMON3_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.OPPONENT_POKEMON3_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.OPPONENT_POKEMON3_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.OPPONENT_POKEMON3_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.OPPONENT_POKEMON3_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON3_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON3_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON3_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.OPPONENT_POKEMON3_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.OPPONENT_POKEMON3_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_def_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON3_ATTACK_DEFENSE_IV_ADDR]
+        pokemon['speed_special_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON3_SPEED_SPECIAL_IV_ADDR]
+        pokemon['pp1'] = self.pyboy.memory[self.OPPONENT_POKEMON3_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.OPPONENT_POKEMON3_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.OPPONENT_POKEMON3_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.OPPONENT_POKEMON3_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.OPPONENT_POKEMON3_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON3_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON3_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON3_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON3_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.OPPONENT_POKEMON3_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON3_SPECIAL_ADDR[1]])
         opponent_info['pokemon_3'] = pokemon.copy()
         # Pokemon 4 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.OPPONENT_POKEMON4_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.OPPONENT_POKEMON4_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.OPPONENT_POKEMON4_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_def_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_ATTACK_DEFENSE_IV_ADDR)
-        pokemon['speed_special_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPEED_SPECIAL_IV_ADDR)
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON4_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.OPPONENT_POKEMON4_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.OPPONENT_POKEMON4_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.OPPONENT_POKEMON4_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.OPPONENT_POKEMON4_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.OPPONENT_POKEMON4_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.OPPONENT_POKEMON4_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.OPPONENT_POKEMON4_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON4_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON4_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON4_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.OPPONENT_POKEMON4_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.OPPONENT_POKEMON4_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_def_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON4_ATTACK_DEFENSE_IV_ADDR]
+        pokemon['speed_special_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON4_SPEED_SPECIAL_IV_ADDR]
+        pokemon['pp1'] = self.pyboy.memory[self.OPPONENT_POKEMON4_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.OPPONENT_POKEMON4_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.OPPONENT_POKEMON4_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.OPPONENT_POKEMON4_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.OPPONENT_POKEMON4_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON4_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON4_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON4_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON4_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.OPPONENT_POKEMON4_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON4_SPECIAL_ADDR[1]])
         opponent_info['pokemon_4'] = pokemon.copy()
         # Pokemon 5 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.OPPONENT_POKEMON5_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.OPPONENT_POKEMON5_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.OPPONENT_POKEMON5_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_def_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_ATTACK_DEFENSE_IV_ADDR)
-        pokemon['speed_special_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPEED_SPECIAL_IV_ADDR)
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON5_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.OPPONENT_POKEMON5_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.OPPONENT_POKEMON5_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.OPPONENT_POKEMON5_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.OPPONENT_POKEMON5_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.OPPONENT_POKEMON5_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.OPPONENT_POKEMON5_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.OPPONENT_POKEMON5_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON5_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON5_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON5_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.OPPONENT_POKEMON5_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.OPPONENT_POKEMON5_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_def_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON5_ATTACK_DEFENSE_IV_ADDR]
+        pokemon['speed_special_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON5_SPEED_SPECIAL_IV_ADDR]
+        pokemon['pp1'] = self.pyboy.memory[self.OPPONENT_POKEMON5_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.OPPONENT_POKEMON5_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.OPPONENT_POKEMON5_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.OPPONENT_POKEMON5_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.OPPONENT_POKEMON5_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON5_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON5_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON5_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON5_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.OPPONENT_POKEMON5_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON5_SPECIAL_ADDR[1]])
         opponent_info['pokemon_5'] = pokemon.copy()
         # Pokemon 6 info
         pokemon = dict()
-        pokemon['id'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_ADDR)
-        pokemon['hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_HP_ADDR[0]) * (2 ** 8)
-                         + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_HP_ADDR[1]))
+        pokemon['id'] = self.pyboy.memory[self.OPPONENT_POKEMON6_ADDR]
+        pokemon['hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_HP_ADDR[0]] * (2 ** 8)
+                         + self.pyboy.memory[self.OPPONENT_POKEMON6_HP_ADDR[1]])
         pokemon['status'] = self.read_status(self.OPPONENT_POKEMON6_STATUS_ADDR)
-        pokemon['type1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_TYPE1_ADDR)
-        pokemon['type2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_TYPE2_ADDR)
-        pokemon['move1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_MOVE1_ADDR)
-        pokemon['move2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_MOVE2_ADDR)
-        pokemon['move3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_MOVE3_ADDR)
-        pokemon['move4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_MOVE4_ADDR)
-        pokemon['exp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_EXP_ADDR[0]) * (2 ** 8)
-                          + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_EXP_ADDR[1]))
-        pokemon['hp_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_HP_EV_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_HP_EV_ADDR[1]))
-        pokemon['atk_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_ATTACK_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_ATTACK_EV_ADDR[1]))
-        pokemon['def_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_DEFENSE_EV_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_DEFENSE_EV_ADDR[1]))
-        pokemon['speed_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPEED_EV_ADDR[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPEED_EV_ADDR[1]))
-        pokemon['special_ev'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPECIAL_EV_ADDR[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPECIAL_EV_ADDR[1]))
-        pokemon['atk_def_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_ATTACK_DEFENSE_IV_ADDR)
-        pokemon['speed_special_iv'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPEED_SPECIAL_IV_ADDR)
-        pokemon['pp1'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_PP_SLOT1_ADDR)
-        pokemon['pp2'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_PP_SLOT2_ADDR)
-        pokemon['pp3'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_PP_SLOT3_ADDR)
-        pokemon['pp4'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_PP_SLOT4_ADDR)
-        pokemon['level'] = self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_LEVEL_ADDR)
-        pokemon['max_hp'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_MAX_HP_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_MAX_HP_ADDR[1]))
-        pokemon['attack'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_ATTACK_ADDR[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_ATTACK_ADDR[1]))
-        pokemon['defense'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_DEFENSE_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_DEFENSE_ADDR[1]))
-        pokemon['speed'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPEED_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPEED_ADDR[1]))
-        pokemon['special'] = (self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPECIAL_ADDR[0]) * (2 ** 8)
-                              + self.pyboy.get_memory_value(self.OPPONENT_POKEMON6_SPECIAL_ADDR[1]))
+        pokemon['type1'] = self.pyboy.memory[self.OPPONENT_POKEMON6_TYPE1_ADDR]
+        pokemon['type2'] = self.pyboy.memory[self.OPPONENT_POKEMON6_TYPE2_ADDR]
+        pokemon['move1'] = self.pyboy.memory[self.OPPONENT_POKEMON6_MOVE1_ADDR]
+        pokemon['move2'] = self.pyboy.memory[self.OPPONENT_POKEMON6_MOVE2_ADDR]
+        pokemon['move3'] = self.pyboy.memory[self.OPPONENT_POKEMON6_MOVE3_ADDR]
+        pokemon['move4'] = self.pyboy.memory[self.OPPONENT_POKEMON6_MOVE4_ADDR]
+        pokemon['exp'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_EXP_ADDR[0]] * (2 ** 8)
+                          + self.pyboy.memory[self.OPPONENT_POKEMON6_EXP_ADDR[1]])
+        pokemon['hp_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_HP_EV_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON6_HP_EV_ADDR[1]])
+        pokemon['atk_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_ATTACK_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON6_ATTACK_EV_ADDR[1]])
+        pokemon['def_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_DEFENSE_EV_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON6_DEFENSE_EV_ADDR[1]])
+        pokemon['speed_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_SPEED_EV_ADDR[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.OPPONENT_POKEMON6_SPEED_EV_ADDR[1]])
+        pokemon['special_ev'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_SPECIAL_EV_ADDR[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.OPPONENT_POKEMON6_SPECIAL_EV_ADDR[1]])
+        pokemon['atk_def_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON6_ATTACK_DEFENSE_IV_ADDR]
+        pokemon['speed_special_iv'] = self.pyboy.memory[self.OPPONENT_POKEMON6_SPEED_SPECIAL_IV_ADDR]
+        pokemon['pp1'] = self.pyboy.memory[self.OPPONENT_POKEMON6_PP_SLOT1_ADDR]
+        pokemon['pp2'] = self.pyboy.memory[self.OPPONENT_POKEMON6_PP_SLOT2_ADDR]
+        pokemon['pp3'] = self.pyboy.memory[self.OPPONENT_POKEMON6_PP_SLOT3_ADDR]
+        pokemon['pp4'] = self.pyboy.memory[self.OPPONENT_POKEMON6_PP_SLOT4_ADDR]
+        pokemon['level'] = self.pyboy.memory[self.OPPONENT_POKEMON6_LEVEL_ADDR]
+        pokemon['max_hp'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_MAX_HP_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON6_MAX_HP_ADDR[1]])
+        pokemon['attack'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_ATTACK_ADDR[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.OPPONENT_POKEMON6_ATTACK_ADDR[1]])
+        pokemon['defense'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_DEFENSE_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON6_DEFENSE_ADDR[1]])
+        pokemon['speed'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_SPEED_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.OPPONENT_POKEMON6_SPEED_ADDR[1]])
+        pokemon['special'] = (self.pyboy.memory[self.OPPONENT_POKEMON6_SPECIAL_ADDR[0]] * (2 ** 8)
+                              + self.pyboy.memory[self.OPPONENT_POKEMON6_SPECIAL_ADDR[1]])
         opponent_info['pokemon_6'] = pokemon.copy()
         return {'opponent': opponent_info}
 
     def get_time_info(self) -> dict:
-        return {'time': {'hours': self.pyboy.get_memory_value(self.GAME_TIME_HOURS_ADDR),
-                         'minutes': self.pyboy.get_memory_value(self.GAME_TIME_MINUTES_ADDR),
-                         'seconds': self.pyboy.get_memory_value(self.GAME_TIME_SECONDS_ADDR)}}
+        return {'time': {'hours': self.pyboy.memory[self.GAME_TIME_HOURS_ADDR],
+                         'minutes': self.pyboy.memory[self.GAME_TIME_MINUTES_ADDR],
+                         'seconds': self.pyboy.memory[self.GAME_TIME_SECONDS_ADDR]}}
 
     def get_item_info(self) -> dict:
         item_info = dict()
-        item_info['total_items'] = self.pyboy.get_memory_value(self.TOTAL_ITEM_COUNT_ADDR)
+        item_info['total_items'] = self.pyboy.memory[self.TOTAL_ITEM_COUNT_ADDR]
         for i, addr in enumerate(self.ITEMS_ADDRS):
-            item_info[f'item{i}'] = {'id': self.pyboy.get_memory_value(addr),
-                                     'quantity': self.pyboy.get_memory_value(self.ITEM_QUANTITIES_ADDRS[i])}
+            item_info[f'item{i}'] = {'id': self.pyboy.memory[addr],
+                                     'quantity': self.pyboy.memory[self.ITEM_QUANTITIES_ADDRS[i]]}
         return {'items': item_info}
 
     def get_flag_info(self) -> dict:
         event_flags_info = dict()
-        event_flags_info['starters_back'] = self.pyboy.get_memory_value(self.STARTERS_BACK_FLAG_ADDR) == 1
-        event_flags_info['mewtwo_appears'] = self.pyboy.get_memory_value(self.MEWTWO_APPEARS_FLAG_ADDR) == 1
-        event_flags_info['have_town_map'] = self.pyboy.get_memory_value(self.HAVE_TOWN_MAP_FLAG_ADDR) == 1
-        event_flags_info['have_oak_parcel'] = self.pyboy.get_memory_value(self.HAVE_OAK_PARCEL_ADDR) == 1
-        event_flags_info['fossilized_pokemon'] = self.pyboy.get_memory_value(self.FOSSILIZED_POKEMON_FLAG_ADDR) == 1
-        event_flags_info['got_lapras'] = self.pyboy.get_memory_value(self.G0T_LAPRAS_ADDR) == 1
-        event_flags_info['fought_giovanni'] = self.pyboy.get_memory_value(self.FOUGHT_GIOVANNI_ADDR) == 1
-        event_flags_info['fought_misty'] = self.pyboy.get_memory_value(self.FOUGHT_MISTY_ADDR) == 1
-        event_flags_info['fought_lt_surge'] = self.pyboy.get_memory_value(self.FOUGHT_LT_SURGE_ADDR) == 1
-        event_flags_info['fought_erika'] = self.pyboy.get_memory_value(self.FOUGHT_ERIKA_ADDR) == 1
-        event_flags_info['fought_articuno'] = self.pyboy.get_memory_value(self.FOUGHT_ARTICUNO_ADDR) == 1
-        event_flags_info['fought_koga'] = self.pyboy.get_memory_value(self.FOUGHT_KOGA_ADDR) == 1
-        event_flags_info['fought_blaine'] = self.pyboy.get_memory_value(self.FOUGHT_BLAINE_ADDR) == 1
-        event_flags_info['fought_sabrina'] = self.pyboy.get_memory_value(self.FOUGHT_SABRINA_ADDR) == 1
-        event_flags_info['fought_zapdos'] = self.pyboy.get_memory_value(self.FOUGHT_ZAPDOS_ADDR) == 1
-        event_flags_info['fought_snorlax_vermilion'] = self.pyboy.get_memory_value(
-            self.FOUGHT_SNORLAX_VERMILION_ADDR) == 1
-        event_flags_info['fought_snorlax_celadon'] = self.pyboy.get_memory_value(self.FOUGHT_SNORLAX_CELADON_ADDR) == 1
-        event_flags_info['fought_moltres'] = self.pyboy.get_memory_value(self.FOUGHT_MOLTRES_ADDR) == 1
-        event_flags_info['is_ss_anne_here'] = self.pyboy.get_memory_value(self.IS_SS_ANNE_HERE_ADDR) == 1
-        event_flags_info['mewtwo_can_be_caught'] = self.pyboy.get_memory_value(self.MEWTWO_CAN_BE_CAUGHT) == 1
+        event_flags_info['starters_back'] = self.pyboy.memory[self.STARTERS_BACK_FLAG_ADDR] == 1
+        event_flags_info['mewtwo_appears'] = self.pyboy.memory[self.MEWTWO_APPEARS_FLAG_ADDR] == 1
+        event_flags_info['have_town_map'] = self.pyboy.memory[self.HAVE_TOWN_MAP_FLAG_ADDR] == 1
+        event_flags_info['have_oak_parcel'] = self.pyboy.memory[self.HAVE_OAK_PARCEL_ADDR] == 1
+        event_flags_info['fossilized_pokemon'] = self.pyboy.memory[self.FOSSILIZED_POKEMON_FLAG_ADDR] == 1
+        event_flags_info['got_lapras'] = self.pyboy.memory[self.G0T_LAPRAS_ADDR] == 1
+        event_flags_info['fought_giovanni'] = self.pyboy.memory[self.FOUGHT_GIOVANNI_ADDR] == 1
+        event_flags_info['fought_misty'] = self.pyboy.memory[self.FOUGHT_MISTY_ADDR] == 1
+        event_flags_info['fought_lt_surge'] = self.pyboy.memory[self.FOUGHT_LT_SURGE_ADDR] == 1
+        event_flags_info['fought_erika'] = self.pyboy.memory[self.FOUGHT_ERIKA_ADDR] == 1
+        event_flags_info['fought_articuno'] = self.pyboy.memory[self.FOUGHT_ARTICUNO_ADDR] == 1
+        event_flags_info['fought_koga'] = self.pyboy.memory[self.FOUGHT_KOGA_ADDR] == 1
+        event_flags_info['fought_blaine'] = self.pyboy.memory[self.FOUGHT_BLAINE_ADDR] == 1
+        event_flags_info['fought_sabrina'] = self.pyboy.memory[self.FOUGHT_SABRINA_ADDR] == 1
+        event_flags_info['fought_zapdos'] = self.pyboy.memory[self.FOUGHT_ZAPDOS_ADDR] == 1
+        event_flags_info['fought_snorlax_vermilion'] = self.pyboy.memory[
+                                                           self.FOUGHT_SNORLAX_VERMILION_ADDR] == 1
+        event_flags_info['fought_snorlax_celadon'] = self.pyboy.memory[self.FOUGHT_SNORLAX_CELADON_ADDR] == 1
+        event_flags_info['fought_moltres'] = self.pyboy.memory[self.FOUGHT_MOLTRES_ADDR] == 1
+        event_flags_info['is_ss_anne_here'] = self.pyboy.memory[self.IS_SS_ANNE_HERE_ADDR] == 1
+        event_flags_info['mewtwo_can_be_caught'] = self.pyboy.memory[self.MEWTWO_CAN_BE_CAUGHT] == 1
         return {'event_flags': event_flags_info}
 
     def get_pokedex_info(self) -> dict:
@@ -1383,106 +1395,107 @@ class PokemonBlueRed(Env):
 
     def get_battle_info(self) -> dict:
         enemy_info = dict()
-        enemy_info['id'] = self.pyboy.get_memory_value(self.ENEMY_POKEMON_ID_ADDR)
+        enemy_info['id'] = self.pyboy.memory[self.ENEMY_POKEMON_ID_ADDR]
         enemy_info['name'] = self.decode_name(self.ENEMY_NAME_ADDRS[0], self.ENEMY_NAME_ADDRS[1])
-        enemy_info['level'] = self.pyboy.get_memory_value(self.ENEMY_LEVEL_ADDR)
-        enemy_info['move'] = self.pyboy.get_memory_value(self.ENEMY_MOVE_ADDR)
-        enemy_info['move_effect'] = self.pyboy.get_memory_value(self.ENEMY_MOVE_EFFECT_ADDR)
-        enemy_info['move_type'] = self.pyboy.get_memory_value(self.ENEMY_MOVE_TYPE_ADDR)
-        enemy_info['move_accuracy'] = self.pyboy.get_memory_value(self.ENEMY_MOVE_ACCURACY_ADDR)
-        enemy_info['move_max_pp'] = self.pyboy.get_memory_value(self.ENEMY_MOVE_MAX_PP_ADDR)
-        enemy_info['hp'] = (self.pyboy.get_memory_value(self.ENEMY_HP_ADDR[0]) * (2 ** 8)
-                            + self.pyboy.get_memory_value(self.ENEMY_HP_ADDR[1]))
+        enemy_info['level'] = self.pyboy.memory[self.ENEMY_LEVEL_ADDR]
+        enemy_info['move'] = self.pyboy.memory[self.ENEMY_MOVE_ADDR]
+        enemy_info['move_effect'] = self.pyboy.memory[self.ENEMY_MOVE_EFFECT_ADDR]
+        enemy_info['move_type'] = self.pyboy.memory[self.ENEMY_MOVE_TYPE_ADDR]
+        enemy_info['move_accuracy'] = self.pyboy.memory[self.ENEMY_MOVE_ACCURACY_ADDR]
+        enemy_info['move_max_pp'] = self.pyboy.memory[self.ENEMY_MOVE_MAX_PP_ADDR]
+        enemy_info['hp'] = (self.pyboy.memory[self.ENEMY_HP_ADDR[0]] * (2 ** 8)
+                            + self.pyboy.memory[self.ENEMY_HP_ADDR[1]])
         enemy_info['status'] = self.read_status(self.ENEMY_STATUS_ADDR)
-        enemy_info['type1'] = self.pyboy.get_memory_value(self.ENEMY_TYPE1_ADDR)
-        enemy_info['type2'] = self.pyboy.get_memory_value(self.ENEMY_TYPE2_ADDR)
-        enemy_info['move1'] = self.pyboy.get_memory_value(self.ENEMY_MOVE1_ADDR)
-        enemy_info['move2'] = self.pyboy.get_memory_value(self.ENEMY_MOVE2_ADDR)
-        enemy_info['move3'] = self.pyboy.get_memory_value(self.ENEMY_MOVE3_ADDR)
-        enemy_info['move4'] = self.pyboy.get_memory_value(self.ENEMY_MOVE4_ADDR)
-        enemy_info['attack_dv'] = self.pyboy.get_memory_value(self.ENEMY_ATTACK_DEFENSE_DVS_ADDR) & 0b1111
-        enemy_info['defense_dv'] = (self.pyboy.get_memory_value(self.ENEMY_ATTACK_DEFENSE_DVS_ADDR) >> 4) & 0b1111
-        enemy_info['speed_dv'] = self.pyboy.get_memory_value(self.ENEMY_SPEED_SPECIAL_DVS_ADDR) & 0b1111
-        enemy_info['special_dv'] = (self.pyboy.get_memory_value(self.ENEMY_SPEED_SPECIAL_DVS_ADDR) >> 4) & 0b1111
-        enemy_info['max_hp'] = (self.pyboy.get_memory_value(self.ENEMY_MAX_HP_ADDRS[0]) * (2 ** 8)
-                                + self.pyboy.get_memory_value(self.ENEMY_MAX_HP_ADDRS[1]))
-        enemy_info['attack'] = (self.pyboy.get_memory_value(self.ENEMY_ATTACK_ADDRS[0]) * (2 ** 8)
-                                + self.pyboy.get_memory_value(self.ENEMY_ATTACK_ADDRS[1]))
-        enemy_info['defense'] = (self.pyboy.get_memory_value(self.ENEMY_DEFENSE_ADDRS[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.ENEMY_DEFENSE_ADDRS[1]))
-        enemy_info['speed'] = (self.pyboy.get_memory_value(self.ENEMY_SPEED_ADDRS[0]) * (2 ** 8)
-                               + self.pyboy.get_memory_value(self.ENEMY_SPEED_ADDRS[1]))
-        enemy_info['special'] = (self.pyboy.get_memory_value(self.ENEMY_SPECIAL_ADDRS[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.ENEMY_SPECIAL_ADDRS[1]))
-        enemy_info['pp1'] = self.pyboy.get_memory_value(self.ENEMY_PP_SLOT1_ADDR)
-        enemy_info['pp2'] = self.pyboy.get_memory_value(self.ENEMY_PP_SLOT2_ADDR)
-        enemy_info['pp3'] = self.pyboy.get_memory_value(self.ENEMY_PP_SLOT3_ADDR)
-        enemy_info['pp4'] = self.pyboy.get_memory_value(self.ENEMY_PP_SLOT4_ADDR)
-        enemy_info['base_hp'] = self.pyboy.get_memory_value(self.ENEMY_BASE_STATS_ADDRS[0])
-        enemy_info['base_attack'] = self.pyboy.get_memory_value(self.ENEMY_BASE_STATS_ADDRS[0] + 1)
-        enemy_info['base_defense'] = self.pyboy.get_memory_value(self.ENEMY_BASE_STATS_ADDRS[0] + 2)
-        enemy_info['base_speed'] = self.pyboy.get_memory_value(self.ENEMY_BASE_STATS_ADDRS[0] + 3)
-        enemy_info['base_special'] = self.pyboy.get_memory_value(self.ENEMY_BASE_STATS_ADDRS[0] + 4)
-        enemy_info['catch_rate'] = self.pyboy.get_memory_value(self.ENEMY_CATCH_RATE_ADDR)
-        enemy_info['base_experience'] = self.pyboy.get_memory_value(self.ENEMY_BASE_EXPERIENCE_ADDR)
+        enemy_info['type1'] = self.pyboy.memory[self.ENEMY_TYPE1_ADDR]
+        enemy_info['type2'] = self.pyboy.memory[self.ENEMY_TYPE2_ADDR]
+        enemy_info['move1'] = self.pyboy.memory[self.ENEMY_MOVE1_ADDR]
+        enemy_info['move2'] = self.pyboy.memory[self.ENEMY_MOVE2_ADDR]
+        enemy_info['move3'] = self.pyboy.memory[self.ENEMY_MOVE3_ADDR]
+        enemy_info['move4'] = self.pyboy.memory[self.ENEMY_MOVE4_ADDR]
+        enemy_info['attack_dv'] = self.pyboy.memory[self.ENEMY_ATTACK_DEFENSE_DVS_ADDR] & 0b1111
+        enemy_info['defense_dv'] = (self.pyboy.memory[self.ENEMY_ATTACK_DEFENSE_DVS_ADDR] >> 4) & 0b1111
+        enemy_info['speed_dv'] = self.pyboy.memory[self.ENEMY_SPEED_SPECIAL_DVS_ADDR] & 0b1111
+        enemy_info['special_dv'] = (self.pyboy.memory[self.ENEMY_SPEED_SPECIAL_DVS_ADDR] >> 4) & 0b1111
+        enemy_info['max_hp'] = (self.pyboy.memory[self.ENEMY_MAX_HP_ADDRS[0]] * (2 ** 8)
+                                + self.pyboy.memory[self.ENEMY_MAX_HP_ADDRS[1]])
+        enemy_info['attack'] = (self.pyboy.memory[self.ENEMY_ATTACK_ADDRS[0]] * (2 ** 8)
+                                + self.pyboy.memory[self.ENEMY_ATTACK_ADDRS[1]])
+        enemy_info['defense'] = (self.pyboy.memory[self.ENEMY_DEFENSE_ADDRS[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.ENEMY_DEFENSE_ADDRS[1]])
+        enemy_info['speed'] = (self.pyboy.memory[self.ENEMY_SPEED_ADDRS[0]] * (2 ** 8)
+                               + self.pyboy.memory[self.ENEMY_SPEED_ADDRS[1]])
+        enemy_info['special'] = (self.pyboy.memory[self.ENEMY_SPECIAL_ADDRS[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.ENEMY_SPECIAL_ADDRS[1]])
+        enemy_info['pp1'] = self.pyboy.memory[self.ENEMY_PP_SLOT1_ADDR]
+        enemy_info['pp2'] = self.pyboy.memory[self.ENEMY_PP_SLOT2_ADDR]
+        enemy_info['pp3'] = self.pyboy.memory[self.ENEMY_PP_SLOT3_ADDR]
+        enemy_info['pp4'] = self.pyboy.memory[self.ENEMY_PP_SLOT4_ADDR]
+        enemy_info['base_hp'] = self.pyboy.memory[self.ENEMY_BASE_STATS_ADDRS[0]]
+        enemy_info['base_attack'] = self.pyboy.memory[self.ENEMY_BASE_STATS_ADDRS[0] + 1]
+        enemy_info['base_defense'] = self.pyboy.memory[self.ENEMY_BASE_STATS_ADDRS[0] + 2]
+        enemy_info['base_speed'] = self.pyboy.memory[self.ENEMY_BASE_STATS_ADDRS[0] + 3]
+        enemy_info['base_special'] = self.pyboy.memory[self.ENEMY_BASE_STATS_ADDRS[0] + 4]
+        enemy_info['catch_rate'] = self.pyboy.memory[self.ENEMY_CATCH_RATE_ADDR]
+        enemy_info['base_experience'] = self.pyboy.memory[self.ENEMY_BASE_EXPERIENCE_ADDR]
 
         player_info = dict()
-        player_info['id'] = self.pyboy.get_memory_value(self.PLAYER_POKEMON_ID_ADDR)
-        player_info['number'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_NUMBER_ADDR)
-        player_info['name'] = self.decode_name(self.IN_BATTLE_POKEMON_NAME_ADDRS[0], self.IN_BATTLE_POKEMON_NAME_ADDRS[1])
-        player_info['level'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_LEVEL_ADDR)
-        player_info['move'] = self.pyboy.get_memory_value(self.PLAYER_MOVE_ID_ADDR)
-        player_info['move_effect'] = self.pyboy.get_memory_value(self.PLAYER_MOVE_EFFECT_ADDR)
-        player_info['move_type'] = self.pyboy.get_memory_value(self.PLAYER_MOVE_TYPE_ADDR)
-        player_info['move_accuracy'] = self.pyboy.get_memory_value(self.PLAYER_MOVE_ACCURACY_ADDR)
-        player_info['move_max_pp'] = self.pyboy.get_memory_value(self.PLAYER_MOVE_MAX_PP_ADDR)
-        player_info['hp'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_HP_ADDRS[0]) * (2 ** 8)
-                             + self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_HP_ADDRS[1]))
+        player_info['id'] = self.pyboy.memory[self.PLAYER_POKEMON_ID_ADDR]
+        player_info['number'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_NUMBER_ADDR]
+        player_info['name'] = self.decode_name(self.IN_BATTLE_POKEMON_NAME_ADDRS[0],
+                                               self.IN_BATTLE_POKEMON_NAME_ADDRS[1])
+        player_info['level'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_LEVEL_ADDR]
+        player_info['move'] = self.pyboy.memory[self.PLAYER_MOVE_ID_ADDR]
+        player_info['move_effect'] = self.pyboy.memory[self.PLAYER_MOVE_EFFECT_ADDR]
+        player_info['move_type'] = self.pyboy.memory[self.PLAYER_MOVE_TYPE_ADDR]
+        player_info['move_accuracy'] = self.pyboy.memory[self.PLAYER_MOVE_ACCURACY_ADDR]
+        player_info['move_max_pp'] = self.pyboy.memory[self.PLAYER_MOVE_MAX_PP_ADDR]
+        player_info['hp'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_HP_ADDRS[0]] * (2 ** 8)
+                             + self.pyboy.memory[self.IN_BATTLE_POKEMON_HP_ADDRS[1]])
         player_info['status'] = self.read_status(self.IN_BATTLE_POKEMON_STATUS_ADDR)
-        player_info['type1'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_TYPE1_ADDR)
-        player_info['type2'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_TYPE2_ADDR)
-        player_info['move1'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_MOVE1_ADDR)
-        player_info['move2'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_MOVE2_ADDR)
-        player_info['move3'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_MOVE3_ADDR)
-        player_info['move4'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_MOVE4_ADDR)
-        player_info['attack_dv'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_ATTACK_DEFENSE_DVS_ADDR) & 0b1111
-        player_info['defense_dv'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_ATTACK_DEFENSE_DVS_ADDR) >> 4) & 0b1111
-        player_info['speed_dv'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_SPEED_SPECIAL_DVS_ADDR) & 0b1111
-        player_info['special_dv'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_SPEED_SPECIAL_DVS_ADDR) >> 4) & 0b1111
-        player_info['max_hp'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_MAX_HP_ADDRS[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_MAX_HP_ADDRS[1]))
-        player_info['attack'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_ATTACK_ADDRS[0]) * (2 ** 8)
-                                 + self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_ATTACK_ADDRS[1]))
-        player_info['defense'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_DEFENSE_ADDRS[0]) * (2 ** 8)
-                                  + self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_DEFENSE_ADDRS[1]))
-        player_info['speed'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_SPEED_ADDRS[0]) * (2 ** 8)
-                                + self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_SPEED_ADDRS[1]))
-        player_info['special'] = (self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_SPECIAL_ADDRS[0]) * (2 ** 8)
-                                  + self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_SPECIAL_ADDRS[1]))
-        player_info['pp1'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_PP_SLOT1_ADDR)
-        player_info['pp2'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_PP_SLOT2_ADDR)
-        player_info['pp3'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_PP_SLOT3_ADDR)
-        player_info['pp4'] = self.pyboy.get_memory_value(self.IN_BATTLE_POKEMON_PP_SLOT4_ADDR)
+        player_info['type1'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_TYPE1_ADDR]
+        player_info['type2'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_TYPE2_ADDR]
+        player_info['move1'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_MOVE1_ADDR]
+        player_info['move2'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_MOVE2_ADDR]
+        player_info['move3'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_MOVE3_ADDR]
+        player_info['move4'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_MOVE4_ADDR]
+        player_info['attack_dv'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_ATTACK_DEFENSE_DVS_ADDR] & 0b1111
+        player_info['defense_dv'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_ATTACK_DEFENSE_DVS_ADDR] >> 4) & 0b1111
+        player_info['speed_dv'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_SPEED_SPECIAL_DVS_ADDR] & 0b1111
+        player_info['special_dv'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_SPEED_SPECIAL_DVS_ADDR] >> 4) & 0b1111
+        player_info['max_hp'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_MAX_HP_ADDRS[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.IN_BATTLE_POKEMON_MAX_HP_ADDRS[1]])
+        player_info['attack'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_ATTACK_ADDRS[0]] * (2 ** 8)
+                                 + self.pyboy.memory[self.IN_BATTLE_POKEMON_ATTACK_ADDRS[1]])
+        player_info['defense'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_DEFENSE_ADDRS[0]] * (2 ** 8)
+                                  + self.pyboy.memory[self.IN_BATTLE_POKEMON_DEFENSE_ADDRS[1]])
+        player_info['speed'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_SPEED_ADDRS[0]] * (2 ** 8)
+                                + self.pyboy.memory[self.IN_BATTLE_POKEMON_SPEED_ADDRS[1]])
+        player_info['special'] = (self.pyboy.memory[self.IN_BATTLE_POKEMON_SPECIAL_ADDRS[0]] * (2 ** 8)
+                                  + self.pyboy.memory[self.IN_BATTLE_POKEMON_SPECIAL_ADDRS[1]])
+        player_info['pp1'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_PP_SLOT1_ADDR]
+        player_info['pp2'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_PP_SLOT2_ADDR]
+        player_info['pp3'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_PP_SLOT3_ADDR]
+        player_info['pp4'] = self.pyboy.memory[self.IN_BATTLE_POKEMON_PP_SLOT4_ADDR]
 
         return {'battle':
-                    {
-                        'player_turn': self.pyboy.get_memory_value(self.WHOSE_TURN_ADDR) == 0,
-                        'enemy': enemy_info,
-                        'player': player_info,
-                        'critical_ohko_flag': self.pyboy.get_memory_value(self.CRITICAL_OHKO_FLAG_ADDR),
-                        'hooked': self.pyboy.get_memory_value(self.HOOKED_POKEMON_FLAG_ADDR),
-                        'damage_amount': self.pyboy.get_memory_value(self.AMOUNT_DAMAGE_ADDR)
-                    }
-                }
+            {
+                'player_turn': self.pyboy.memory[self.WHOSE_TURN_ADDR] == 0,
+                'enemy': enemy_info,
+                'player': player_info,
+                'critical_ohko_flag': self.pyboy.memory[self.CRITICAL_OHKO_FLAG_ADDR],
+                'hooked': self.pyboy.memory[self.HOOKED_POKEMON_FLAG_ADDR],
+                'damage_amount': self.pyboy.memory[self.AMOUNT_DAMAGE_ADDR]
+            }
+        }
 
     def get_joypad_simulation_info(self) -> dict:
-        return {'joypad_simulation': self.pyboy.get_memory_value(self.JOYPAD_SIMULATION_ADDR) != 0x00}
-    
+        return {'joypad_simulation': self.pyboy.memory[self.JOYPAD_SIMULATION_ADDR] != 0x00}
+
     #   ******************************************************
     #                        UTILITIES
     #   ******************************************************
     def read_status(self, addr: int) -> dict:
-        status_info = self.pyboy.get_memory_value(addr)
+        status_info = self.pyboy.memory[addr]
         return {'paralyzed': (0b01000000 & status_info) == 0b01000000,
                 'frozen': (0b00100000 & status_info) == 0b00100000,
                 'burned': (0b00010000 & status_info) == 0b00010000,
@@ -1492,7 +1505,7 @@ class PokemonBlueRed(Env):
     def decode_name(self, starting_addr: int, final_addr: int) -> str:
         name = ''
         for addr in range(starting_addr, final_addr + 1):
-            char = self.TEXT_TABLE[self.pyboy.get_memory_value(addr).to_bytes(1, byteorder='big')]
+            char = self.TEXT_TABLE[self.pyboy.memory[addr].to_bytes(1, byteorder='big')]
             if char == 'END_MARKER':
                 break
             name += char
@@ -1502,7 +1515,7 @@ class PokemonBlueRed(Env):
         return self.list_one_bits_locations(self.BADGES_ADDR)
 
     def list_one_bits_locations(self, addr: int) -> list:
-        value = self.pyboy.get_memory_value(addr)
+        value = self.pyboy.memory[addr]
         ones = list()
         for i in range(8):
             if value & (1 << i):
@@ -1541,9 +1554,8 @@ class PokemonBlueRed(Env):
     def select_first_pokemon(info: dict, multiplier: float = 1.0, pokemon: str | None = None) -> float:
         # TASK 4
         assert pokemon is None or pokemon.lower().strip() in ['squirtle', 'charmander', 'bulbasaur'], \
-            (
-                'Pokemon should be None if which pokemon is selected is not important, otherwise squirtle, charmander, '
-                'bulbasaur]')
+            ('Pokemon should be None if which pokemon is selected is not important, otherwise squirtle, charmander, '
+             'bulbasaur]')
 
         # squirtle == B1 char B0 b 99
         if pokemon is None:
@@ -1601,8 +1613,7 @@ class PokemonBlueRed(Env):
                     if how_many is None:
                         return multiplier
                     else:
-                        return multiplier * (
-                                    1 / (1 + abs(how_many - info['items'][f'item_{how_many}']['quantity'])))
+                        return multiplier * (1 / (1 + abs(how_many - info['items'][f'item_{how_many}']['quantity'])))
 
     @staticmethod
     def deliver_package_and_get_pokedex(info: dict, prev_info: dict, multiplier: float = 1.0) -> float:

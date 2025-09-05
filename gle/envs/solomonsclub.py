@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -25,10 +26,9 @@ class SolomonsClub(Env):
 
     def __init__(self, level: int = 1, room: int = 1, window_type: str = 'headless',
                  save_path: str | None = None, load_path: str | None = None, all_actions: bool = False,
-                 return_sound: bool = False,):
+                 return_sound: bool = False, rgba: bool = False,):
         assert 1 <= level <= 5, 'Level must be between 1 and 5'
         assert 1 <= room <= 10, 'Room must be between 1 and 10'
-        assert window_type == 'SDL2' or window_type == 'headless'
         super().__init__()
         self.level = level
         self.room = room
@@ -36,13 +36,14 @@ class SolomonsClub(Env):
         self.prev_lives = None
         self.prev_money = None
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.save_path = save_path
@@ -50,8 +51,8 @@ class SolomonsClub(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
-        assert "SOLOMON'S CLUB" == self.pyboy.cartridge_title(), "The cartridge's title should be 'SOLOMON'S CLUB"
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
+        assert "SOLOMON'S CLUB" == self.pyboy.cartridge_title, "The cartridge's title should be 'SOLOMON'S CLUB"
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -85,10 +86,13 @@ class SolomonsClub(Env):
                 [WindowEvent.RELEASE_BUTTON_A, WindowEvent.RELEASE_ARROW_LEFT]  # JUMP AND CREATE/DESTROY BLOCK
             ]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
         self.reset()
 
     #   ******************************************************
@@ -107,7 +111,7 @@ class SolomonsClub(Env):
             done = False
 
         if self.return_sound:
-            return obs, self.screen.sound, self.reward(info['money'], info['remaining_time'],
+            return obs, self.pyboy.sound.ndarray, self.reward(info['money'], info['remaining_time'],
                                                        info['lives']), done, False, info
         else:
             return obs, self.reward(info['money'], info['remaining_time'], info['lives']), done, False, info
@@ -136,7 +140,10 @@ class SolomonsClub(Env):
         return self.render(), {}
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()   # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -144,11 +151,11 @@ class SolomonsClub(Env):
         with importlib.resources.path('gle.roms', "Solomon's Club (UE) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -165,47 +172,21 @@ class SolomonsClub(Env):
     #              UTILITY FUNCTIONS USED IN OVERRIDING
     #   ******************************************************
     def take_action(self, action_idx: int) -> None:
-        if action_idx > len(self.actions) - 4:     # DOWN AND CREATE AND DESTROY BLOCK
+        if action_idx > len(self.actions) - 4 or action_idx == len(
+                self.actions) - 4:  # DOWN AND CREATE AND DESTROY BLOCK or JUMP AND CREATE/DESTROY BLOCK
             self.pyboy.send_input(self.actions[action_idx][0])
-
-            for i in range(15):
-                if i == 8:
-                    self.pyboy.send_input(self.actions[action_idx][1])
-                self.pyboy.tick()
-
-            for i in range(15):
-                if i == 8:
-                    self.pyboy.send_input(self.release_actions[action_idx][1])
-                self.pyboy.tick()
-
-            for i in range(15):
-                if i == 8:
-                    self.pyboy.send_input(self.release_actions[action_idx][0])
-                self.pyboy.tick()
-
-        elif action_idx == len(self.actions) - 4:   # JUMP AND CREATE/DESTROY BLOCK
-            self.pyboy.send_input(self.actions[action_idx][0])
-
-            for i in range(15):
-                if i == 16:
-                    self.pyboy.send_input(self.actions[action_idx][1])
-                self.pyboy.tick()
-
-            for i in range(15):
-                if i == 8:
-                    self.pyboy.send_input(self.release_actions[action_idx][1])
-                self.pyboy.tick()
-
-            for i in range(15):
-                if i == 8:
-                    self.pyboy.send_input(self.release_actions[action_idx][0])
-                self.pyboy.tick()
+            self.pyboy.tick(7)
+            self.pyboy.send_input(self.actions[action_idx][1])
+            self.pyboy.tick(15)
+            self.pyboy.send_input(self.release_actions[action_idx][1])
+            self.pyboy.tick(15)
+            self.pyboy.send_input(self.release_actions[action_idx][0])
+            self.pyboy.tick(8)
         else:
             self.pyboy.send_input(self.actions[action_idx])
-            for i in range(15):
-                if i == 8:
-                    self.pyboy.send_input(self.release_actions[action_idx])
-                self.pyboy.tick()
+            self.pyboy.tick(7)
+            self.pyboy.send_input(self.release_actions[action_idx])
+            self.pyboy.tick(8)
 
     def get_info(self) -> dict:
         return {'level': self.get_level(),
@@ -228,7 +209,7 @@ class SolomonsClub(Env):
             self.prev_time = remaining_time
             self.prev_money = 0
 
-        reward = (money - self.prev_money) #+ 1000 * (lives - self.prev_lives)
+        reward = (money - self.prev_money)  # + 1000 * (lives - self.prev_lives)
         self.prev_time = remaining_time
         self.prev_lives = lives
         self.prev_money = money
@@ -238,18 +219,14 @@ class SolomonsClub(Env):
     #                FUNCTION FOR MOVING IN THE MENU
     #   ******************************************************
     def go_to_level_selection(self) -> None:
-        while self.pyboy.frame_count != 250:
-            self.pyboy.tick()
-        if self.pyboy.frame_count == 250:
-            self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-            for i in range(80):
-                if i == 8:
-                    self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
-                self.pyboy.tick()
+        self.pyboy.tick(250)
+        self.pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        self.pyboy.tick(7)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        self.pyboy.tick(73)
 
     def wait_level_selection(self) -> None:
-        while self.pyboy.frame_count != 335:
-            self.pyboy.tick()
+        self.pyboy.tick(20)
 
     def from_level_selection_to_level(self, level):
         while level != 1:
@@ -259,10 +236,9 @@ class SolomonsClub(Env):
             self.pyboy.tick()
             level -= 1
         self.pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
-        for i in range(80):
-            if i == 8:
-                self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_A)
-            self.pyboy.tick()
+        self.pyboy.tick(7)
+        self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_A)
+        self.pyboy.tick(83)
 
     def from_level_to_room(self, room: int = 1) -> None:
         if room > 5:
@@ -286,42 +262,43 @@ class SolomonsClub(Env):
     #                FUNCTION FOR READING RAM
     #   ******************************************************
     def get_time_remaining(self) -> int:
-        return self.pyboy.get_memory_value(self.TIME_REMAINING_ADDR[0]) * (2 ** 8) + self.pyboy.get_memory_value(self.TIME_REMAINING_ADDR[1])
-        #    int.from_bytes(self.pyboy.get_memory_value(self.TIME_REMAINING_ADDR[0]).to_bytes(2, byteorder='big')
-        #                      + self.pyboy.get_memory_value(self.TIME_REMAINING_ADDR[1]).to_bytes(2, byteorder='big'),
+        return self.pyboy.memory[self.TIME_REMAINING_ADDR[0]] * (2 ** 8) + self.pyboy.memory[
+            self.TIME_REMAINING_ADDR[1]]
+        #    int.from_bytes(self.pyboy.memory[self.TIME_REMAINING_ADDR[0]).to_bytes(2, byteorder='big')
+        #                      + self.pyboy.memory[self.TIME_REMAINING_ADDR[1]).to_bytes(2, byteorder='big'),
         #                      byteorder='little')
 
     def get_level(self) -> int:
-        return self.pyboy.get_memory_value(self.LEVEL_ADDR)
+        return self.pyboy.memory[self.LEVEL_ADDR]
 
     def get_room(self) -> int:
-        return self.pyboy.get_memory_value(self.ROOM_ADDR)
+        return self.pyboy.memory[self.ROOM_ADDR]
 
     def get_lives(self) -> int:
-        return self.pyboy.get_memory_value(self.LIVES_ADDR)
+        return self.pyboy.memory[self.LIVES_ADDR]
 
     def get_n_collected_fairies(self) -> int:
-        return self.pyboy.get_memory_value(self.N_COLLECTED_FAIRIES_ADDR)
+        return self.pyboy.memory[self.N_COLLECTED_FAIRIES_ADDR]
 
     def get_n_fireballs(self) -> int:
-        return self.pyboy.get_memory_value(self.N_FIREBALLS_ADDR)
+        return self.pyboy.memory[self.N_FIREBALLS_ADDR]
 
     def get_n_hammers(self) -> int:
-        return self.pyboy.get_memory_value(self.N_HAMMERS_ADDR)
+        return self.pyboy.memory[self.N_HAMMERS_ADDR]
 
     def get_n_hourglasses(self) -> int:
-        return self.pyboy.get_memory_value(self.N_HOURGLASSES_ADDR)
+        return self.pyboy.memory[self.N_HOURGLASSES_ADDR]
 
     def get_n_waterguns(self) -> int:
-        return self.pyboy.get_memory_value(self.N_WATERGUNS_ADDR)
+        return self.pyboy.memory[self.N_WATERGUNS_ADDR]
 
     def has_shoes(self) -> bool:
-        return self.pyboy.get_memory_value(self.SHOES_ADDR) == 1
+        return self.pyboy.memory[self.SHOES_ADDR] == 1
 
     def has_hat(self) -> bool:
-        return self.pyboy.get_memory_value(self.HAT_ADDR) == 1
+        return self.pyboy.memory[self.HAT_ADDR] == 1
 
     def get_money(self) -> int:
-        return (self.pyboy.get_memory_value(self.MONEY_ADDR[0]) * (2 ** 16)
-                + self.pyboy.get_memory_value(self.MONEY_ADDR[1]) * (2 ** 8)
-                + self.pyboy.get_memory_value(self.MONEY_ADDR[2]))
+        return (self.pyboy.memory[self.MONEY_ADDR[0]] * (2 ** 16)
+                + self.pyboy.memory[self.MONEY_ADDR[1]] * (2 ** 8)
+                + self.pyboy.memory[self.MONEY_ADDR[2]])

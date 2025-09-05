@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -41,21 +42,21 @@ class CastlevaniaIIBelmontsRevenge(Env):
     HEARTS_ADDR = 0xCC86    # [d]
     BELMONT_HITPOINTS_ADDR = 0xCC89  # [u]
 
-    def __init__(self, level: str = 'crystal', hard: bool = False, window_type: str = 'headless',
+    def __init__(self, level: str = 'crystal', hard: bool = False, window_type: str = 'null',
                  save_path: str | None = None, load_path: str | None = None, max_actions: int | None = None,
-                 all_actions: bool = False, return_sound: bool = False,):
-        assert window_type == 'SDL2' or window_type == 'headless'
+                 all_actions: bool = False, return_sound: bool = False, rgba: bool = False,):
         super().__init__()
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
         with importlib.resources.path('gle.roms', "Castlevania II - Belmont's Revenge (U) [!].gb") as rom_path:
             self.pyboy = PyBoy(
                 str(rom_path),
-                window_type=self.window_type
+                window=self.window_type
             )
 
         self.save_path = save_path
@@ -68,7 +69,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             self.load_path = f'states/castlevaniaiibelmont/{level}.state'
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -105,7 +106,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
         self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
         self.prev_action_idx = None
         self.prev_score = 0
@@ -130,7 +131,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
         reward = info['score'] - self.prev_score
         self.prev_score = info['score']
         if self.return_sound:
-            return obs, self.screen.sound, reward, done, False, info
+            return obs, self.pyboy.sound.ndarray, reward, done, False, info
         else:
             return obs, reward, done, False, info
 
@@ -148,7 +149,10 @@ class CastlevaniaIIBelmontsRevenge(Env):
         return self.render(), self.get_info()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -160,7 +164,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             )
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -183,12 +187,10 @@ class CastlevaniaIIBelmontsRevenge(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
         else:  # different action
             # release previous actions
             old_actions_to_be_released = self.release_actions[self.prev_action_idx]
@@ -205,56 +207,53 @@ class CastlevaniaIIBelmontsRevenge(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
 
     def take_action2(self, action_idx: int):
         self.pyboy.send_input(self.actions[action_idx])
-        for i in range(15):
-            if i == 8:
-                self.pyboy.send_input(self.release_actions[action_idx])
-            self.pyboy.tick()
+        self.pyboy.tick(7)
+        self.pyboy.send_input(self.release_actions[action_idx])
+        self.pyboy.tick(8)
 
     def get_info(self) -> dict:
         info = dict()
-        info['hearts'] = self.read_bcd(self.pyboy.get_memory_value(self.HEARTS_ADDR))
-        info['lives'] = self.pyboy.get_memory_value(self.LIVES_ADDR)
+        info['hearts'] = self.read_bcd(self.pyboy.memory[self.HEARTS_ADDR])
+        info['lives'] = self.pyboy.memory[self.LIVES_ADDR]
         info['score'] = self.decode_score()
-        info['time_remaining'] = (100 * self.read_bcd(self.pyboy.get_memory_value(self.TIME_REMAINING_ADDRS[1]))
-                                  + self.read_bcd(self.pyboy.get_memory_value(self.TIME_REMAINING_ADDRS[0])))
-        info['hitpoints'] = self.pyboy.get_memory_value(self.BELMONT_HITPOINTS_ADDR)
+        info['time_remaining'] = (100 * self.read_bcd(self.pyboy.memory[self.TIME_REMAINING_ADDRS[1]])
+                                  + self.read_bcd(self.pyboy.memory[self.TIME_REMAINING_ADDRS[0]]))
+        info['hitpoints'] = self.pyboy.memory[self.BELMONT_HITPOINTS_ADDR]
         info['game_mode'] = self.decode_game_mode()
         info['state'] = self.decode_state()
         info['substate'] = self.decode_substate()
         info['stage'] = self.decode_stage()
-        info['substage'] = self.pyboy.get_memory_value(self.CURRENT_SUBSTAGE_ADDR)
-        info['hurt_flag'] = self.pyboy.get_memory_value(self.FLAG_BELMONT_HURT_ADDR)
-        info['facing'] = 'left' if self.pyboy.get_memory_value(self.BELMONT_FACING_ADDR) & 0x20 else 'right'
-        info['sprite_idx'] = self.pyboy.get_memory_value(self.BELMONT_SPRITE_INDEX_ADDR)
-        info['x_pixel'] = self.pyboy.get_memory_value(self.BELMONT_X_PIXEL_ADDR)
-        info['x_subpixel'] = self.pyboy.get_memory_value(self.BELMONT_X_SUBPIXEL_ADDR)
-        info['y_pixel'] = self.pyboy.get_memory_value(self.BELMONT_Y_PIXEL_ADDR)
-        info['y_subpixel'] = self.pyboy.get_memory_value(self.BELMONT_Y_SUBPIXEL_ADDR)
-        info['hitstun'] = self.pyboy.get_memory_value(self.HITSTUN_ADDR)
+        info['substage'] = self.pyboy.memory[self.CURRENT_SUBSTAGE_ADDR]
+        info['hurt_flag'] = self.pyboy.memory[self.FLAG_BELMONT_HURT_ADDR]
+        info['facing'] = 'left' if self.pyboy.memory[self.BELMONT_FACING_ADDR] & 0x20 else 'right'
+        info['sprite_idx'] = self.pyboy.memory[self.BELMONT_SPRITE_INDEX_ADDR]
+        info['x_pixel'] = self.pyboy.memory[self.BELMONT_X_PIXEL_ADDR]
+        info['x_subpixel'] = self.pyboy.memory[self.BELMONT_X_SUBPIXEL_ADDR]
+        info['y_pixel'] = self.pyboy.memory[self.BELMONT_Y_PIXEL_ADDR]
+        info['y_subpixel'] = self.pyboy.memory[self.BELMONT_Y_SUBPIXEL_ADDR]
+        info['hitstun'] = self.pyboy.memory[self.HITSTUN_ADDR]
         info['subweapon_projectile'] = self.decode_projectile()
         info['subweapon_mode'] = self.decode_subweapon_mode()
-        info['global_game_timer'] = self.pyboy.get_memory_value(self.GLOBAL_GAME_TIMER_ADDR)
+        info['global_game_timer'] = self.pyboy.memory[self.GLOBAL_GAME_TIMER_ADDR]
         info['subweapon'] = self.decode_subweapon()
         info['whip_upgrade'] = self.decode_whip_upgrade()
-        info['screen_x'] = self.pyboy.get_memory_value(self.SCREEN_X_ADDR)
-        info['screen_y'] = self.pyboy.get_memory_value(self.SCREEN_Y_ADDR)
-        info['sublevel_scroll'] = 'vertical' if self.pyboy.get_memory_value(self.SUBLEVEL_SCROLL_ADDR) else 'horizontal'
+        info['screen_x'] = self.pyboy.memory[self.SCREEN_X_ADDR]
+        info['screen_y'] = self.pyboy.memory[self.SCREEN_Y_ADDR]
+        info['sublevel_scroll'] = 'vertical' if self.pyboy.memory[self.SUBLEVEL_SCROLL_ADDR] else 'horizontal'
         return info
 
     #   ******************************************************
     #                FUNCTION FOR READING RAM
     #   ******************************************************
     def decode_state(self) -> str:
-        value = self.pyboy.get_memory_value(self.BELMONT_STATE_ADDR)
+        value = self.pyboy.memory[self.BELMONT_STATE_ADDR]
         if value == 0x00:
             return 'standing'
         elif value == 0x01:
@@ -267,7 +266,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             return 'UNK'
 
     def decode_substate(self) -> str:
-        value = self.pyboy.get_memory_value(self.BELMONT_STATE_ADDR)
+        value = self.pyboy.memory[self.BELMONT_STATE_ADDR]
         if value == 0x00:
             return 'none'
         elif value == 0x01:
@@ -278,7 +277,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             return 'UNK'
 
     def decode_projectile(self) -> str:
-        value = self.pyboy.get_memory_value(self.SUBWEAPON_PROJECTILE_ID_ADDR)
+        value = self.pyboy.memory[self.SUBWEAPON_PROJECTILE_ID_ADDR]
         if value == 0x00:
             return 'none'
         elif value == 0x01:
@@ -289,7 +288,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             return 'UNK'
 
     def decode_subweapon_mode(self) -> str:
-        value = self.pyboy.get_memory_value(self.SUBWEAPON_MODE_ADDR)
+        value = self.pyboy.memory[self.SUBWEAPON_MODE_ADDR]
         if value == 0x00:
             return 'winding up to toss'
         elif value == 0x01:
@@ -302,23 +301,23 @@ class CastlevaniaIIBelmontsRevenge(Env):
     def decode_game_mode(self) -> str:
         try:
             modes = ['konami logo', 'title screen', 'title fade', 'stage\\title screen selected', 'stage entry',
-                 'normal gameplay', 'death', 'game over', 'credits', 'password entry', 'intro reel']
-            return modes[self.pyboy.get_memory_value(self.GAME_MODE_ADDR)]
+                     'normal gameplay', 'death', 'game over', 'credits', 'password entry', 'intro reel']
+            return modes[self.pyboy.memory[self.GAME_MODE_ADDR]]
         except:
-            return str(self.pyboy.get_memory_value(self.GAME_MODE_ADDR))
+            return str(self.pyboy.memory[self.GAME_MODE_ADDR])
 
     def decode_stage(self) -> str:
         stages = ['plant', 'plant', 'crystal', 'cloud', 'rock', 'drac1', 'drac2', 'drac3']
-        return stages[self.pyboy.get_memory_value(self.CURRENT_STAGE_ADDR)]
+        return stages[self.pyboy.memory[self.CURRENT_STAGE_ADDR]]
 
     def decode_score(self) -> int:
         score = 0
         for i, addr in enumerate(range(self.SCORE_ADDRS[0], self.SCORE_ADDRS[1])):
-            score += self.read_bcd(self.pyboy.get_memory_value(addr)) * (100 ** i)
+            score += self.read_bcd(self.pyboy.memory[addr]) * (100 ** i)
         return score
 
     def decode_subweapon(self) -> str:
-        value = self.pyboy.get_memory_value(self.SUBWEAPON_ADDR)
+        value = self.pyboy.memory[self.SUBWEAPON_ADDR]
         if value == 0x00:
             return 'none'
         elif value == 0x01:
@@ -329,7 +328,7 @@ class CastlevaniaIIBelmontsRevenge(Env):
             return 'UNK'
 
     def decode_whip_upgrade(self) -> str:
-        value = self.pyboy.get_memory_value(self.WHIP_UPGRADE_ADDR)
+        value = self.pyboy.memory[self.WHIP_UPGRADE_ADDR]
         if value == 0x00:
             return 'leather'
         elif value == 0x01:
@@ -344,4 +343,3 @@ class CastlevaniaIIBelmontsRevenge(Env):
     #   ******************************************************
     def read_bcd(self, value) -> int:
         return 10 * ((value >> 4) & 0x0f) + (value & 0x0f)
-

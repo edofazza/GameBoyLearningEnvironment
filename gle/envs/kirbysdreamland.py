@@ -2,7 +2,8 @@ from typing import Any, SupportsFloat
 
 import numpy as np
 from gymnasium.core import ObsType, ActType, RenderFrame
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces
 import importlib.resources
 
@@ -22,16 +23,15 @@ class KirbysDreamLand(Env):
     LIVES_ADDR = 0xD089
     BOSS_HP_ADDR = 0xD093
 
-    def __init__(self, window_type: str = 'headless', save_path: str | None = None, load_path: str | None = None,
+    def __init__(self, window_type: str = 'null', save_path: str | None = None, load_path: str | None = None,
                  max_actions: int | None = None, all_actions: bool = False, subtask: str | None = None,
-                 return_sound: bool = False,):
-        assert window_type == 'SDL2' or window_type == 'headless'
+                 return_sound: bool = False, rgba: bool = False,):
         super().__init__()
         self.prev_action_idx = None
-        self.prev_score = 0
         self.max_actions = max_actions
         self.actions_taken = 0
         self.window_type = window_type
+        self.rgba = rgba
         # Sound
         self.return_sound = return_sound
 
@@ -46,7 +46,7 @@ class KirbysDreamLand(Env):
         if load_path is not None:
             self.load()
 
-        print(f'CARTRIDGE: {self.pyboy.cartridge_title()}')
+        print(f'CARTRIDGE: {self.pyboy.cartridge_title}')
 
         if all_actions:
             self.actions = ALL_ACTIONS
@@ -84,10 +84,13 @@ class KirbysDreamLand(Env):
                 [WindowEvent.RELEASE_ARROW_LEFT, WindowEvent.RELEASE_BUTTON_A, WindowEvent.RELEASE_BUTTON_B]
             ]
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
+        if self.rgba:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(4, 144, 160), dtype=np.uint8)
+        else:
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3, 144, 160), dtype=np.uint8)
         self.action_space = spaces.Discrete(len(self.actions))
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
         self.subtask = subtask
         if self.subtask == 'boss_battle':
@@ -104,6 +107,7 @@ class KirbysDreamLand(Env):
         else:
             self.prev_score = info['score']
             self.original_score = info['score']
+
 
     #   ******************************************************
     #               GYMNASIUM OVERRIDING FUNCTION
@@ -124,6 +128,8 @@ class KirbysDreamLand(Env):
 
         if self.subtask == 'boss_battle':
             reward = self.prev_boss_hp - info['boss_hp']
+            if reward < 0:
+                reward = 0
             self.prev_boss_hp = info['boss_hp']
             done = self.prev_boss_hp == 0 or done
         else:
@@ -131,9 +137,9 @@ class KirbysDreamLand(Env):
             self.prev_score = info['score']
 
         if self.return_sound:
-            return obs, self.screen.sound, reward, done, False, info
+            return obs, self.pyboy.sound.ndarray, reward, done, False, info
         else:
-            return obs, reward, done, False, info
+            return obs, reward, False, False, info
 
     def reset(
             self,
@@ -155,7 +161,10 @@ class KirbysDreamLand(Env):
         return self.render(), self.get_info()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
-        screen_obs = self.screen.screen_ndarray()  # (144, 160, 3)
+        if self.rgba:
+            screen_obs = self.screen.ndarray  # (144, 160, 4) RGBA
+        else:
+            screen_obs = self.screen.ndarray[:, :, :-1]  # (144, 160, 3) RGB
         return screen_obs.reshape((screen_obs.shape[2], screen_obs.shape[0], screen_obs.shape[1]))  # (3, 144, 160)
 
     def close(self):
@@ -165,27 +174,26 @@ class KirbysDreamLand(Env):
                 str(rom_path),
                 window_type=self.window_type
             )
+
         if self.load_path is not None:
             self.load()
-        self.screen = self.pyboy.botsupport_manager().screen()
+        self.screen = self.pyboy.screen
 
     #   ******************************************************
     #                FUNCTION FOR MOVING IN THE GAME
     #   ******************************************************
     def skip_game_initial_video(self):
-        while not self.pyboy.tick():
-            if self.pyboy.frame_count == 180:
-                self.take_action2(WindowEvent.PRESS_BUTTON_START, WindowEvent.RELEASE_BUTTON_START)
-                self.take_action2(WindowEvent.PRESS_BUTTON_A, WindowEvent.RELEASE_BUTTON_A)
-                self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
-                self.take_action2(WindowEvent.PRESS_BUTTON_A, WindowEvent.RELEASE_BUTTON_A)
-                self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
-                self.take_action2(WindowEvent.PRESS_BUTTON_START, WindowEvent.RELEASE_BUTTON_START)
-                self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
-                self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
-                self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
-                self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
-                break
+        self.pyboy.tick(180)
+        self.take_action2(WindowEvent.PRESS_BUTTON_START, WindowEvent.RELEASE_BUTTON_START)
+        self.take_action2(WindowEvent.PRESS_BUTTON_A, WindowEvent.RELEASE_BUTTON_A)
+        self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
+        self.take_action2(WindowEvent.PRESS_BUTTON_A, WindowEvent.RELEASE_BUTTON_A)
+        self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
+        self.take_action2(WindowEvent.PRESS_BUTTON_START, WindowEvent.RELEASE_BUTTON_START)
+        self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
+        self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
+        self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
+        self.take_action2(WindowEvent.PASS, WindowEvent.PASS)
 
     #   ******************************************************
     #                  SAVE AND LOAD FUNCTIONS
@@ -208,12 +216,10 @@ class KirbysDreamLand(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(10)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
         else:  # different action
             # release previous actions
             old_actions_to_be_released = self.release_actions[self.prev_action_idx]
@@ -230,40 +236,37 @@ class KirbysDreamLand(Env):
             if isinstance(selected_action, list):
                 for action in selected_action:
                     self.pyboy.send_input(action)
-                    for _ in range(5):
-                        self.pyboy.tick()
+                    self.pyboy.tick(5)
             else:
                 self.pyboy.send_input(selected_action)
-                for _ in range(10):
-                    self.pyboy.tick()
+                self.pyboy.tick(10)
 
     def take_action2(self, action: WindowEvent, release: WindowEvent):
         self.pyboy.send_input(action)
-        for i in range(24):
-            if i == 8:
-                self.pyboy.send_input(release)
-            self.pyboy.tick()
+        self.pyboy.tick(8)
+        self.pyboy.send_input(release)
+        self.pyboy.tick(16)
 
     def get_info(self) -> dict:
         info = dict()
-        info['hp'] = self.pyboy.get_memory_value(self.HP_ADDR)
-        info['lives'] = self.pyboy.get_memory_value(self.LIVES_ADDR)
+        info['hp'] = self.pyboy.memory[self.HP_ADDR]
+        info['lives'] = self.pyboy.memory[self.LIVES_ADDR]
         info['score'] = self.get_score()
-        info['state'] = self.pyboy.get_memory_value(self.GAME_STATE_ADDR)
-        info['x_pos'] = self.pyboy.get_memory_value(self.X_POS_ON_SCREEN_ADDR)
-        info['y_pos'] = self.pyboy.get_memory_value(self.Y_POS_ON_SCREEN_ADDR)
-        info['inhale_timer'] = self.pyboy.get_memory_value(self.INHALE_TIMER_ADDR)
-        info['boss_hp'] = self.pyboy.get_memory_value(self.BOSS_HP_ADDR)
+        info['state'] = self.pyboy.memory[self.GAME_STATE_ADDR]
+        info['x_pos'] = self.pyboy.memory[self.X_POS_ON_SCREEN_ADDR]
+        info['y_pos'] = self.pyboy.memory[self.Y_POS_ON_SCREEN_ADDR]
+        info['inhale_timer'] = self.pyboy.memory[self.INHALE_TIMER_ADDR]
+        info['boss_hp'] = self.pyboy.memory[self.BOSS_HP_ADDR]
         return info
 
     #   ******************************************************
     #                FUNCTION FOR READING RAM
     #   ******************************************************
     def get_score(self) -> int:
-        return (10000 * self.read_bcd(self.pyboy.get_memory_value(self.SCORE_10000S_PLACE_ADDR))
-                + 1000 * self.read_bcd(self.pyboy.get_memory_value(self.SCORE_1000S_PLACE_ADDR))
-                + 100 * self.read_bcd(self.pyboy.get_memory_value(self.SCORE_100S_PLACE_ADDR))
-                + 10 * self.read_bcd(self.pyboy.get_memory_value(self.SCORE_10S_PLACE_ADDR)))
+        return (10000 * self.read_bcd(self.pyboy.memory[self.SCORE_10000S_PLACE_ADDR])
+                + 1000 * self.read_bcd(self.pyboy.memory[self.SCORE_1000S_PLACE_ADDR])
+                + 100 * self.read_bcd(self.pyboy.memory[self.SCORE_100S_PLACE_ADDR])
+                + 10 * self.read_bcd(self.pyboy.memory[self.SCORE_10S_PLACE_ADDR]))
 
     #   ******************************************************
     #                        UTILITIES
