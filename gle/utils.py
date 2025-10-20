@@ -9,10 +9,10 @@ from gle.envs.castlevania2 import CastlevaniaIIBelmontsRevenge
 from gle.envs.kirbysdreamland import KirbysDreamLand
 from gle.envs.zeldalinksawakening import ZeldaLinksAwakening
 from gle.envs.pokemonbluered import PokemonBlueRed
-#from gle.envs.donkeykongland2 import DonkeyKongLand2
+from gle.envs.donkeykongland2 import DonkeyKongLand2
 from gle.envs.pokemongoldsilver import PokemonGoldSilver
-#from gle.envs.megamanxtreme import MegaManXtreme
-#from gle.envs.megamandrwilysrevenge import MegaManDrWilysRevenge
+from gle.envs.megamanxtreme import MegaManXtreme
+from gle.envs.megamandrwilysrevenge import MegaManDrWilysRevenge
 
 
 def create_env(name: str = 'pokemonred', window_type: str = 'headless', seed: int = 42,
